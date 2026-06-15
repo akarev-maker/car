@@ -5,6 +5,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { Reflector } from "three/addons/objects/Reflector.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 const canvas = document.getElementById("game");
 
@@ -353,25 +354,41 @@ function audioEngine(speed, maxSpeed, throttle, running) {
   audio.engineGain.gain.setTargetAtTime(vol, t, 0.08);
 }
 
+// The sound of a car blowing past: filtered noise whose pitch doppler-shifts up
+// as it nears then drops as it recedes, volume swelling at the moment it's
+// alongside, the whole thing sweeping across the stereo field.
 function audioWhoosh(panVal, intensity) {
   if (!audio || intensity <= 0.01) return;
   const t = audio.ac.currentTime;
-  const dur = 0.3;
+  const dur = 0.42;
+  const peak = t + dur * 0.4;            // the instant it's right beside you
   const src = audio.ac.createBufferSource();
   src.buffer = audio.noiseBuffer;
+  src.loop = true;
+
+  // Bandpass gives it a wind/tyre-roar body; sweep = doppler (rise then fall).
   const bp = audio.ac.createBiquadFilter();
   bp.type = "bandpass";
-  bp.Q.value = 0.9;
-  bp.frequency.setValueAtTime(500, t);
-  bp.frequency.exponentialRampToValueAtTime(2200, t + dur);
+  bp.Q.value = 1.1;
+  bp.frequency.setValueAtTime(360, t);
+  bp.frequency.exponentialRampToValueAtTime(1100, peak);
+  bp.frequency.exponentialRampToValueAtTime(300, t + dur);
+  // Roll off the hiss so it reads as "air", not "static".
+  const lp = audio.ac.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = 2600;
+
   const g = audio.ac.createGain();
   g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.8 * intensity, t + 0.05);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  src.connect(bp).connect(g);
+  g.gain.exponentialRampToValueAtTime(0.7 * intensity, peak); // swell as it arrives
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);       // fade as it leaves
+  src.connect(bp).connect(lp).connect(g);
+
   if (audio.ac.createStereoPanner) {
     const pan = audio.ac.createStereoPanner();
-    pan.pan.value = clamp(panVal, -1, 1);
+    const side = clamp(panVal, -1, 1) || 0.5;
+    pan.pan.setValueAtTime(side, t);                 // starts on the car's side
+    pan.pan.linearRampToValueAtTime(-side * 0.7, t + dur); // sweeps past behind you
     g.connect(pan).connect(audio.master);
   } else {
     g.connect(audio.master);
@@ -948,6 +965,56 @@ function initSharedAssets() {
   _matTrailer = new THREE.MeshStandardMaterial({ color: 0xdfe3e8, roughness: 0.7, metalness: 0.1 });
   _matBodyDark = new THREE.MeshStandardMaterial({ color: 0x15171c, roughness: 0.6, metalness: 0.3 });
   _matChrome   = new THREE.MeshStandardMaterial({ color: 0xb9c1cd, roughness: 0.28, metalness: 0.9 });
+
+  // --- Pre-merged vehicle parts -------------------------------------------
+  // A vehicle's shape is colour-independent, so we bake each material's panels
+  // into ONE geometry up front. A car then draws in ~9 calls instead of ~30,
+  // which is the bulk of the per-frame cost when traffic is dense.
+  const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
+  const at = (geo, pos = [0, 0, 0], rot = [0, 0, 0], scale = [1, 1, 1]) => {
+    const c = geo.clone();
+    _e.set(rot[0], rot[1], rot[2]); _q.setFromEuler(_e);
+    _m4.compose(new THREE.Vector3(...pos), _q, new THREE.Vector3(...scale));
+    return c.applyMatrix4(_m4);
+  };
+  const merge = (parts) => mergeGeometries(parts, false);
+  const RZ = [0, 0, Math.PI / 2]; // wheels lie on their side
+
+  _geo.carPaint = merge([
+    at(_geo.body, [0, 0.62, 0]), at(_geo.hood, [0, 0.8, -1.42]),
+    at(_geo.deck, [0, 0.82, 1.62]), at(_geo.cabin, [0, 1.04, 0.12]),
+    at(_geo.roof, [0, 1.32, 0.18]),
+  ]);
+  _geo.carDark = merge([
+    at(_geo.skirt, [0, 0.34, 0]), at(_geo.bumper, [0, 0.48, -2.12]),
+    at(_geo.bumper, [0, 0.48, 2.12]), at(_geo.spoiler, [0, 0.98, 2.16]),
+  ]);
+  _geo.carGlass = merge([
+    at(_geo.glassF, [0, 1.16, -0.86], [0.62, 0, 0]),
+    at(_geo.glassR, [0, 1.18, 1.12], [-0.66, 0, 0]),
+    at(_geo.glassS, [0.81, 1.12, 0.18]), at(_geo.glassS, [-0.81, 1.12, 0.18]),
+  ]);
+  const wheels = [], hubs = [];
+  for (const [x, z] of [[0.94, 1.4], [-0.94, 1.4], [0.94, -1.4], [-0.94, -1.4]]) {
+    wheels.push(at(_geo.wheel, [x, 0.42, z], RZ));
+    hubs.push(at(_geo.hub, [x, 0.42, z], RZ));
+  }
+  _geo.carWheels = merge(wheels);
+  _geo.carChrome = merge([...hubs, at(_geo.grille, [0, 0.66, -2.24])]);
+  _geo.carHead = merge([at(_geo.light, [0.64, 0.68, -2.22]), at(_geo.light, [-0.64, 0.68, -2.22])]);
+  _geo.carTail = merge([at(_geo.light, [0.64, 0.74, 2.22]), at(_geo.light, [-0.64, 0.74, 2.22])]);
+  _geo.carBlinkR = merge([at(_geo.blinker, [0.95, 0.74, -2.0]), at(_geo.blinker, [0.95, 0.74, 2.0])]);
+  _geo.carBlinkL = merge([at(_geo.blinker, [-0.95, 0.74, -2.0]), at(_geo.blinker, [-0.95, 0.74, 2.0])]);
+
+  _geo.truckWheels = merge([[1, -2.6], [-1, -2.6], [1, 0], [-1, 0], [1, 2.6], [-1, 2.6]]
+    .map(([x, z]) => at(_geo.bigWheel, [x, 0.5, z], RZ)));
+  _geo.truckHead = merge([at(_geo.light, [0.7, 0.7, -3.45]), at(_geo.light, [-0.7, 0.7, -3.45])]);
+  _geo.truckTail = merge([at(_geo.light, [0.7, 1.0, 3.5]), at(_geo.light, [-0.7, 1.0, 3.5])]);
+
+  _geo.busWheels = merge([[1, -2.4], [-1, -2.4], [1, 2.4], [-1, 2.4]]
+    .map(([x, z]) => at(_geo.bigWheel, [x, 0.5, z], RZ)));
+  _geo.busHead = merge([at(_geo.light, [0.7, 0.7, -3.25]), at(_geo.light, [-0.7, 0.7, -3.25])]);
+  _geo.busTail = merge([at(_geo.light, [0.7, 0.7, 3.25]), at(_geo.light, [-0.7, 0.7, 3.25])]);
 }
 
 function paintMat(color) {
@@ -964,52 +1031,26 @@ function signMat(color) {
 // chrome trim, hub-capped wheels and a subtle lip — front faces -Z.
 function buildProceduralCar(color) {
   const g = new THREE.Group();
-  const paint = paintMat(color);
+  // One mesh per material (panels pre-merged in initSharedAssets), so the whole
+  // car is ~9 draw calls. Front faces -Z.
+  g.add(new THREE.Mesh(_geo.carPaint, paintMat(color)));
+  g.add(new THREE.Mesh(_geo.carDark, _matBodyDark));
+  g.add(new THREE.Mesh(_geo.carGlass, _matGlass));
+  g.add(new THREE.Mesh(_geo.carWheels, _matTire));
+  g.add(new THREE.Mesh(_geo.carChrome, _matChrome));
+  g.add(new THREE.Mesh(_geo.carHead, _matHead));
+  g.add(new THREE.Mesh(_geo.carTail, _matTail));
 
-  const skirt = new THREE.Mesh(_geo.skirt, _matBodyDark); skirt.position.y = 0.34; g.add(skirt);
-  const body  = new THREE.Mesh(_geo.body, paint);  body.position.y = 0.62; g.add(body);
-  const hood  = new THREE.Mesh(_geo.hood, paint);  hood.position.set(0, 0.8, -1.42); g.add(hood);
-  const deck  = new THREE.Mesh(_geo.deck, paint);  deck.position.set(0, 0.82, 1.62); g.add(deck);
-
-  // Greenhouse: a cabin base capped by a narrower roof, set slightly back.
-  const cabin = new THREE.Mesh(_geo.cabin, paint); cabin.position.set(0, 1.04, 0.12); g.add(cabin);
-  const roof  = new THREE.Mesh(_geo.roof, paint);  roof.position.set(0, 1.32, 0.18); g.add(roof);
-
-  // Glass: raked windshield + rear window, plus a thin window down each side.
-  const windF = new THREE.Mesh(_geo.glassF, _matGlass); windF.position.set(0, 1.16, -0.86); windF.rotation.x = 0.62; g.add(windF);
-  const windR = new THREE.Mesh(_geo.glassR, _matGlass); windR.position.set(0, 1.18, 1.12); windR.rotation.x = -0.66; g.add(windR);
-  for (const sx of [0.81, -0.81]) {
-    const s = new THREE.Mesh(_geo.glassS, _matGlass); s.position.set(sx, 1.12, 0.18); g.add(s);
-  }
-
-  for (const [x, z] of [[0.94, 1.4], [-0.94, 1.4], [0.94, -1.4], [-0.94, -1.4]]) {
-    const w = new THREE.Mesh(_geo.wheel, _matTire);
-    w.rotation.z = Math.PI / 2; w.position.set(x, 0.42, z); g.add(w);
-    const hub = new THREE.Mesh(_geo.hub, _matChrome);
-    hub.rotation.z = Math.PI / 2; hub.position.set(x, 0.42, z); g.add(hub);
-  }
-
-  // Bumpers, grille and a subtle rear lip for shape.
-  const fB = new THREE.Mesh(_geo.bumper, _matBodyDark); fB.position.set(0, 0.48, -2.12); g.add(fB);
-  const rB = new THREE.Mesh(_geo.bumper, _matBodyDark); rB.position.set(0, 0.48, 2.12); g.add(rB);
-  const grille = new THREE.Mesh(_geo.grille, _matChrome); grille.position.set(0, 0.66, -2.24); g.add(grille);
-  const lip = new THREE.Mesh(_geo.spoiler, _matBodyDark); lip.position.set(0, 0.98, 2.16); g.add(lip);
-
-  for (const x of [0.64, -0.64]) {
-    const h = new THREE.Mesh(_geo.light, _matHead); h.position.set(x, 0.68, -2.22); g.add(h);
-    const t = new THREE.Mesh(_geo.light, _matTail); t.position.set(x, 0.74, 2.22); g.add(t);
-  }
   const sh = new THREE.Mesh(_geo.shadow, _matShadow);
   sh.rotation.x = -Math.PI / 2; sh.position.y = 0.02; g.add(sh);
-  // Turn indicators at all four corners (front + rear), hidden until a merge.
-  // placeTraffic flips them on by world side, blinking; the player car leaves
-  // them dark. Grouped by local side so the rotation for oncoming is handled.
-  const mkBlink = (x, z) => {
-    const m = new THREE.Mesh(_geo.blinker, _matBlinker);
-    m.position.set(x, 0.74, z); m.visible = false; g.add(m); return m;
-  };
-  g.userData.blinkR = [mkBlink(0.95, -2.0), mkBlink(0.95, 2.0)]; // local +X
-  g.userData.blinkL = [mkBlink(-0.95, -2.0), mkBlink(-0.95, 2.0)]; // local -X
+
+  // Turn indicators (both corners per side merged into one mesh), hidden until a
+  // merge. placeTraffic flips them on by world side, blinking; the player leaves
+  // them dark. Kept in arrays so the existing toggle code is unchanged.
+  const blinkR = new THREE.Mesh(_geo.carBlinkR, _matBlinker); blinkR.visible = false; g.add(blinkR);
+  const blinkL = new THREE.Mesh(_geo.carBlinkL, _matBlinker); blinkL.visible = false; g.add(blinkL);
+  g.userData.blinkR = [blinkR]; // local +X
+  g.userData.blinkL = [blinkL]; // local -X
   return g;
 }
 
@@ -1021,13 +1062,9 @@ function buildTruck(color) {
   const glass = new THREE.Mesh(_geo.glass, _matGlass);
   glass.scale.set(1.06, 0.7, 0.28); glass.position.set(0, 1.35, -3.35); g.add(glass);
   const trailer = new THREE.Mesh(_geo.truckTrailer, _matTrailer); trailer.position.set(0, 1.45, 0.9); g.add(trailer);
-  for (const [x, z] of [[1, -2.6], [-1, -2.6], [1, 0], [-1, 0], [1, 2.6], [-1, 2.6]]) {
-    const w = new THREE.Mesh(_geo.bigWheel, _matTire); w.rotation.z = Math.PI / 2; w.position.set(x, 0.5, z); g.add(w);
-  }
-  for (const x of [0.7, -0.7]) {
-    const h = new THREE.Mesh(_geo.light, _matHead); h.position.set(x, 0.7, -3.45); g.add(h);
-    const t = new THREE.Mesh(_geo.light, _matTail); t.position.set(x, 1.0, 3.5); g.add(t);
-  }
+  g.add(new THREE.Mesh(_geo.truckWheels, _matTire));
+  g.add(new THREE.Mesh(_geo.truckHead, _matHead));
+  g.add(new THREE.Mesh(_geo.truckTail, _matTail));
   const sh = new THREE.Mesh(_geo.shadow, _matShadow);
   sh.rotation.x = -Math.PI / 2; sh.position.y = 0.02; sh.scale.set(1.25, 2.1, 1); g.add(sh);
   return g;
@@ -1036,13 +1073,9 @@ function buildBus(color) {
   const g = new THREE.Group();
   const body = new THREE.Mesh(_geo.busBody, paintMat(color)); body.position.set(0, 1.5, 0); g.add(body);
   const stripe = new THREE.Mesh(_geo.busStripe, _matGlass); stripe.position.set(0, 1.95, 0.2); g.add(stripe);
-  for (const [x, z] of [[1, -2.4], [-1, -2.4], [1, 2.4], [-1, 2.4]]) {
-    const w = new THREE.Mesh(_geo.bigWheel, _matTire); w.rotation.z = Math.PI / 2; w.position.set(x, 0.5, z); g.add(w);
-  }
-  for (const x of [0.7, -0.7]) {
-    const h = new THREE.Mesh(_geo.light, _matHead); h.position.set(x, 0.7, -3.25); g.add(h);
-    const t = new THREE.Mesh(_geo.light, _matTail); t.position.set(x, 0.7, 3.25); g.add(t);
-  }
+  g.add(new THREE.Mesh(_geo.busWheels, _matTire));
+  g.add(new THREE.Mesh(_geo.busHead, _matHead));
+  g.add(new THREE.Mesh(_geo.busTail, _matTail));
   const sh = new THREE.Mesh(_geo.shadow, _matShadow);
   sh.rotation.x = -Math.PI / 2; sh.position.y = 0.02; sh.scale.set(1.2, 2.0, 1); g.add(sh);
   return g;
@@ -1320,7 +1353,8 @@ function render() {
   const sf = clamp(state.speed / state.maxSpeed, 0, 1);
   camera.fov += (CAM_FOV + sf * 10 - camera.fov) * 0.1;
   camera.updateProjectionMatrix();
-  const shake = state.flash * 0.25 + state.shake * 0.6 + sf * 0.03;
+  // A clean pass is mostly a visual flash now; only sideswipes/crashes (state.shake) really jolt the camera.
+  const shake = state.flash * 0.07 + state.shake * 0.6 + sf * 0.03;
   camera.position.x = state.playerX * 1.4 + (Math.random() - 0.5) * shake;
   camera.position.y = 4.3 + (Math.random() - 0.5) * shake * 0.5;
   camera.lookAt(state.playerX * 2.2, 1.2, -26);
