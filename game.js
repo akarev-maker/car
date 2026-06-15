@@ -464,7 +464,7 @@ window.addEventListener("keydown", (e) => {
     case "ArrowUp": case "w": case "W": keys.up = true; break;
     case "ArrowDown": case "s": case "S": keys.down = true; break;
     case "m": case "M": toggleMute(); break;
-    case "Escape": if (state.running) quitRun(); break; // stop driving -> results
+    case "Escape": if (state.running) quitRun(); break; // stop driving -> home
   }
 });
 window.addEventListener("keyup", (e) => {
@@ -817,9 +817,8 @@ function update() {
   state.flash *= 0.9;
   state.hitFlash *= 0.88;
   state.shake *= 0.85;
-
-  audioEngine(state.speed, state.maxSpeed, input.throttle, true);
-  updateHUD();
+  // NOTE: HUD + engine audio are presentation, not physics. They run once per
+  // rendered frame from loop(), never inside this (possibly multi-step) update.
 }
 
 // Glancing contact: heavy speed loss, lost combo, red flash + scrape — but you
@@ -1104,7 +1103,9 @@ function makeRoadTexture(twoway) {
 
 function initThree() {
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  // Cap at 1.5x: on Retina/4K (dpr 2) full 2x renders 4x the pixels, which is a
+  // big fill-rate cost for little visible gain here. 1.5 keeps it sharp + smooth.
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 
   scene = new THREE.Scene();
   // Sky + fog share one persistent Color that the biome engine recolors in place.
@@ -1367,8 +1368,9 @@ function isBlocked() {
 const FIXED_DT = 1000 / 60;   // ms per simulation step
 const MAX_STEPS = 5;          // clamp catch-up after a stall (no spiral of death)
 let _loopPrev = 0, _accum = 0;
+let _loopRunning = false; // guards against stacking parallel rAF chains on restart
 function loop(now) {
-  if (!state.running) return;
+  if (!state.running) { _loopRunning = false; return; }
   if (!_loopPrev) _loopPrev = now;
   _accum += now - _loopPrev;
   _loopPrev = now;
@@ -1379,6 +1381,12 @@ function loop(now) {
     _accum -= FIXED_DT;
     steps++;
     if (!state.running) break;   // update() may end the run mid-step
+  }
+  // Presentation runs once per frame regardless of how many physics steps ran,
+  // so a slow frame can't multiply DOM/audio work and spiral the frame rate.
+  if (state.running && !isBlocked()) {
+    updateHUD();
+    audioEngine(state.speed, state.maxSpeed, input.throttle, true);
   }
   if (state.running) render();
   requestAnimationFrame(loop);
@@ -1413,7 +1421,7 @@ function resetRunState() {
   state.position = 0;
   state.speed = 0;
   state.maxSpeed = 60;
-  state.playerX = START_LANE;
+  state.playerX = trafficMode === "oneway" ? 0 : START_LANE; // one-way: start center
   state.playerVX = 0;
   state.lastSpawnPos = 0;
   state.nextSceneryZ = 0;
@@ -1439,16 +1447,16 @@ function startGame() {
   document.getElementById("results").classList.add("hidden");
   updateHUD();
   _loopPrev = 0; _accum = 0;   // fresh clock so the first frame doesn't burst catch-up
-  requestAnimationFrame(loop);
+  if (!_loopRunning) { _loopRunning = true; requestAnimationFrame(loop); } // never stack chains
 }
 
-function gameOver() { endRun(true); }   // crashed into traffic
-function quitRun() { endRun(false); }   // chose to stop (Esc)
+function gameOver() { endRun(true); }          // crashed into traffic -> results
+function quitRun() { endRun(false, true); }    // chose to stop (Esc) -> straight home
 
 // End the current run: bank credits, record the high score, show results. A
 // crash adds the impact SFX + shake and a beat before the card; a voluntary
 // stop skips straight to it.
-function endRun(crashed) {
+function endRun(crashed, toHome) {
   if (!state.running) return;
   state.running = false;
   if (audio) audio.engineGain.gain.setTargetAtTime(0, audio.ac.currentTime, 0.1);
@@ -1465,6 +1473,13 @@ function endRun(crashed) {
   if (isHi) highScore = state.score;
   saveProgress();
 
+  // Quitting (Esc) banks the run and drops straight to the home menu; a crash
+  // still gets the results card with the run breakdown.
+  if (toHome) {
+    document.getElementById("results").classList.add("hidden");
+    showMenu();
+    return;
+  }
   setTimeout(() => showResults(isHi), crashed ? 550 : 120);
 }
 
