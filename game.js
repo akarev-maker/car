@@ -10,6 +10,7 @@ const canvas = document.getElementById("game");
 
 // ---- World layout (real 3D, Three.js) ----
 const LANES = [-0.8, -0.4, 0.4, 0.8]; // 4 lanes split by a center reservation (±1 = road edges)
+const START_LANE = 0.4; // you begin in an inner lane, never on the center masts
 const SPAWN_DZ = 4800;   // how far ahead (game-z units) traffic appears
 const ROAD_HALF_W = 9;   // world half-width of the asphalt (lx = ±1)
 const ROAD_LEN = 660;    // world length of the road / ground meshes
@@ -146,7 +147,7 @@ const state = {
   position: 0,
   speed: 0,
   maxSpeed: 60,
-  playerX: 0,
+  playerX: START_LANE,
   playerVX: 0,
   lastSpawnPos: 0,
   nextSceneryZ: 0,
@@ -1209,7 +1210,7 @@ function resetRunState() {
   state.position = 0;
   state.speed = 0;
   state.maxSpeed = 60;
-  state.playerX = 0;
+  state.playerX = START_LANE;
   state.playerVX = 0;
   state.lastSpawnPos = 0;
   state.nextSceneryZ = 0;
