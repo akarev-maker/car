@@ -167,12 +167,11 @@ const DIST_DIV = 16000;     // game-units per displayed "km"
 const CREDIT_RATE = 0.125;  // credits earned = score x this (score stays the bragging number)
 
 // ---- Biome engine -------------------------------------------------------
-// The world cycles through a ring of biomes as you drive. Each entry is a full
-// set of environment params; the engine smoothsteps between neighbours every
-// frame so the change is seamless. Drop another biome in the ring and it slots
-// straight into the rotation — Day<->Night is just the first two stops.
-const BIOME_CYCLE_KM = 8;     // distance for one full lap around the ring
-const BIOME_BLEND = 0.4;      // fraction of each biome's span spent crossfading to the next
+// The world continuously cycles through a ring of biomes as you drive. Each
+// entry is a full set of environment params; every frame the engine cosine-
+// blends between neighbours so the world is always gently shifting. Drop another
+// biome in the ring and it slots straight in — Day<->Night is the first two.
+const BIOME_CYCLE_KM = 6;     // distance for one full day->night->day lap
 const BIOMES = [
   { name: "Day",
     sky: 0x86c8e8, fogNear: 70, fogFar: 300,
@@ -972,20 +971,16 @@ const _biomeSky = new THREE.Color(0x86c8e8);
 const _biomeTmp = new THREE.Color();
 let nightFactor = 0;          // 0 day .. 1 night; drives the headlight glow
 let biomeShown = null;        // dominant biome currently named in the HUD
-const smoothstep = (t) => t * t * (3 - 2 * t);
 
 // Sample the biome ring at the given distance (km) and push the blended
 // environment onto the scene, lights, grass and shared car materials.
 function applyBiome(km) {
   const n = BIOMES.length;
-  const u = ((km / BIOME_CYCLE_KM) % 1 + 1) % 1; // 0..1 around the ring
-  const f = u * n;
+  const f = ((km / BIOME_CYCLE_KM) % 1 + 1) % 1 * n; // wrapped position on the ring
   const i = Math.floor(f);
-  const p = f - i;                                // 0..1 progress within this biome's span
-  // Hold on the current biome, then smoothstep into the next over the final
-  // BIOME_BLEND of its span — so day and night each persist before the change.
-  const edge = 1 - BIOME_BLEND;
-  const t = p <= edge ? 0 : smoothstep((p - edge) / BIOME_BLEND);
+  // Continuous, ever-moving blend — no plateaus, so the world is always visibly
+  // shifting. Cosine easing keeps each handoff smooth at the pure day/night ends.
+  const t = (1 - Math.cos((f - i) * Math.PI)) / 2;
   const a = BIOMES[i % n], b = BIOMES[(i + 1) % n];
   const mix = (ka, kb) => ka + (kb - ka) * t;
 
