@@ -9,8 +9,9 @@ import { Reflector } from "three/addons/objects/Reflector.js";
 const canvas = document.getElementById("game");
 
 // ---- World layout (real 3D, Three.js) ----
-const LANES = [-0.8, -0.4, 0.4, 0.8]; // 4 lanes split by a center reservation (±1 = road edges)
-const START_LANE = 0.4; // you begin in an inner lane, never on the center masts
+// 4 lanes across the carriageway (±1 = road edges); split into your direction
+// and oncoming further down (see FWD_LANES / ONC_LANES).
+const START_LANE = 0.4; // you begin in an inner lane, clear of oncoming traffic
 const SPAWN_DZ = 4800;   // how far ahead (game-z units) traffic appears
 const ROAD_HALF_W = 9;   // world half-width of the asphalt (lx = ±1)
 const ROAD_LEN = 660;    // world length of the road / ground meshes
@@ -26,7 +27,6 @@ const TRAFFIC_COLORS = ["#ef476f", "#06d6a0", "#118ab2", "#ffd166", "#9b5de5", "
 // ---- Roadside scenery ----
 const SIGN_COLORS = ["#2e7d32", "#1565c0", "#f9a825"]; // highway / info / warning
 const SCENERY_STEP = 150; // average spacing between roadside objects (world units)
-const MAST_STEP = 480;    // spacing between center lighting masts (game-z units)
 
 // ---- Driving feel ----
 const ACCEL = 1.3;
@@ -45,6 +45,26 @@ const NEAR_MISS_RANGE = 0.58; // within this (but safe) = bonus
 const TRAFFIC_MAX_SPEED = 30; // absolute traffic speed (so better cars overtake more)
 const TRAFFIC_MIN_FACTOR = 0.5; // slowest traffic is half top speed (nobody parks on the highway)
 const TRAFFIC_GAP = 700; // min world gap between cars in a lane (they queue, not overlap)
+
+// ---- Traffic modes ----
+// One-way: all four lanes flow your direction (the classic game).
+// Two-way: the carriageway splits down the middle — you drive the right lanes,
+// the left lanes carry oncoming traffic. Dipping left for a near miss pays big.
+const ALL_LANES = [-0.8, -0.4, 0.4, 0.8]; // sorted left -> right
+const FWD_LANES = [0.4, 0.8];    // two-way: your direction (right side)
+const ONC_LANES = [-0.4, -0.8];  // two-way: oncoming (left side)
+const ONCOMING_BONUS = 1.8;      // near-miss score multiplier vs oncoming traffic
+const LANE_CHANGE_RATE = 0.013;  // how fast a weaving car slides between its lanes
+const SIGNAL_FRAMES = 55;        // blinker flashes this long before the merge starts
+// Per-kind traffic: heavies are slower and a touch wider. halfW is added to the
+// contact tolerances, so it MUST stay well under the 0.4 lane spacing or a heavy
+// in the next lane over would falsely register contact (it's only the extra
+// width vs a car, which is small — not the truck's whole body).
+const VEHICLES = {
+  car:   { speedF: 1.00, halfW: 0.00 },
+  truck: { speedF: 0.60, halfW: 0.05 },
+  bus:   { speedF: 0.70, halfW: 0.04 },
+};
 
 // ---- Cars you can unlock (the first one is intentionally weak) ----
 // engine = { idle, rev: firing-rate range (Hz); growl: distortion; bass: sub level; bright: filter }
@@ -107,7 +127,14 @@ function effStats(c) {
 let bank = 0;
 let owned = ["hatch"];
 let selectedCar = "hatch";
+let trafficMode = "twoway"; // "oneway" (all lanes your way) | "twoway" (oncoming half)
+let speedUnit = "kmh";      // "kmh" | "mph" — display only; internal units unchanged
 let highScore = 0;
+
+// Internal speed -> display number. 1 internal unit = 3 km/h; mph = km/h × 0.621371.
+const SPEED_UNITS = { kmh: { factor: 3, label: "km/h" }, mph: { factor: 1.864113, label: "mph" } };
+const spd = (internal) => Math.round(internal * SPEED_UNITS[speedUnit].factor);
+const spdLabel = () => SPEED_UNITS[speedUnit].label;
 let activeCar = CARS[0];
 let upgrades = defaultUpgrades();
 let activeStats = effStats(CARS[0]); // active car's upgraded stats, set on start
@@ -117,6 +144,9 @@ function loadProgress() {
     bank = parseInt(localStorage.getItem("tr_bank")) || 0;
     owned = JSON.parse(localStorage.getItem("tr_owned")) || ["hatch"];
     selectedCar = localStorage.getItem("tr_selected") || "hatch";
+    trafficMode = localStorage.getItem("tr_mode") === "oneway" ? "oneway" : "twoway";
+    speedUnit = localStorage.getItem("tr_unit") === "mph" ? "mph" : "kmh";
+    muted = localStorage.getItem("tr_muted") === "1";
     highScore = parseInt(localStorage.getItem("tr_hi")) || 0;
     upgrades = JSON.parse(localStorage.getItem("tr_upg")) || {};
   } catch (e) { /* use defaults */ }
@@ -135,6 +165,9 @@ function saveProgress() {
     localStorage.setItem("tr_bank", bank);
     localStorage.setItem("tr_owned", JSON.stringify(owned));
     localStorage.setItem("tr_selected", selectedCar);
+    localStorage.setItem("tr_mode", trafficMode);
+    localStorage.setItem("tr_unit", speedUnit);
+    localStorage.setItem("tr_muted", muted ? "1" : "0");
     localStorage.setItem("tr_hi", highScore);
     localStorage.setItem("tr_upg", JSON.stringify(upgrades));
   } catch (e) { /* ignore */ }
@@ -151,7 +184,6 @@ const state = {
   playerVX: 0,
   lastSpawnPos: 0,
   nextSceneryZ: 0,
-  nextMastZ: 0,
   flash: 0,
   hitFlash: 0,      // red flash on a glancing hit
   shake: 0,         // camera shake amount
@@ -180,9 +212,9 @@ const BIOMES = [
     hemiSky: 0xbfe3ff, hemiGround: 0x4a6b3a, hemiInt: 1.0,
     sunColor: 0xfff1da, sunInt: 1.0, grass: 0x2f9e44, night: 0 },
   { name: "Night",
-    sky: 0x050811, fogNear: 38, fogFar: 175,
-    hemiSky: 0x1b2747, hemiGround: 0x03040a, hemiInt: 0.28,
-    sunColor: 0x8aa0e0, sunInt: 0.22, grass: 0x0e2a18, night: 1 },
+    sky: 0x050811, fogNear: 48, fogFar: 220,
+    hemiSky: 0x2b3a64, hemiGround: 0x06080f, hemiInt: 0.6,
+    sunColor: 0xaec2ff, sunInt: 0.85, grass: 0x10331e, night: 1 },
 ];
 
 let traffic = [];
@@ -420,6 +452,7 @@ function toggleMute() {
   if (audio) audio.master.gain.setTargetAtTime(muted ? 0 : 0.9, audio.ac.currentTime, 0.02);
   const btn = document.getElementById("mute");
   if (btn) btn.textContent = muted ? "🔇" : "🔊";
+  saveProgress();
 }
 
 // ---- Keyboard ----
@@ -497,34 +530,71 @@ window.addEventListener("mousemove", (e) => { if (joyActive) joyMove(e.clientX, 
 window.addEventListener("mouseup", () => { if (joyActive) joyEnd(); });
 
 // ---- Traffic ----
-function spawnCarInLane(lane) {
+// Mostly cars, with the occasional heavy. Oncoming keeps fewer heavies so the
+// fast-closing side stays readable.
+function pickKind(dir) {
+  const r = Math.random();
+  if (dir < 0) return r < 0.10 ? "truck" : r < 0.17 ? "bus" : "car";
+  return r < 0.15 ? "truck" : r < 0.26 ? "bus" : "car";
+}
+// Lanes flowing your way: all four in one-way mode, the right pair in two-way.
+function fwdLanes() { return trafficMode === "oneway" ? ALL_LANES : FWD_LANES; }
+// The set of lanes a vehicle can weave within (its own carriageway).
+function laneGroupOf(car) {
+  if (car.dir < 0) return ONC_LANES;
+  return trafficMode === "oneway" ? ALL_LANES : FWD_LANES;
+}
+// A random lane immediately adjacent to `lane` within its group (or itself).
+function adjacentLane(lane, group) {
+  const i = group.indexOf(lane);
+  const opts = [];
+  if (i > 0) opts.push(group[i - 1]);
+  if (i < group.length - 1) opts.push(group[i + 1]);
+  return opts.length ? opts[Math.floor(Math.random() * opts.length)] : lane;
+}
+
+function spawnVehicle(lane, dir) {
   const z = state.position + SPAWN_DZ;
-  // Don't drop a car on top of one already in this lane near the spawn point.
+  // Don't drop a vehicle on top of one already heading the same way in this lane.
   for (const c of traffic) {
-    if (c.lx === lane && Math.abs(c.z - z) < TRAFFIC_GAP * 1.6) return;
+    if (c.lane === lane && c.dir === dir && Math.abs(c.z - z) < TRAFFIC_GAP * 1.6) return;
   }
+  const kind = pickKind(dir);
+  const v = VEHICLES[kind];
+  // Everyone keeps moving — slowest is still half of top traffic speed.
+  const base = TRAFFIC_MAX_SPEED * (TRAFFIC_MIN_FACTOR + (1 - TRAFFIC_MIN_FACTOR) * Math.random());
   traffic.push({
-    lx: lane,
-    z,
+    lane, lx: lane, z, dir, kind,
+    halfW: v.halfW,
     prevDz: SPAWN_DZ,
-    // Everyone keeps moving — slowest is still half of top traffic speed.
-    speed: TRAFFIC_MAX_SPEED * (TRAFFIC_MIN_FACTOR + (1 - TRAFFIC_MIN_FACTOR) * Math.random()),
+    speed: base * v.speedF,
     color: TRAFFIC_COLORS[Math.floor(Math.random() * TRAFFIC_COLORS.length)],
+    changeCD: 90 + Math.floor(Math.random() * 180), // frames until it may weave
+    signalDir: 0,      // world side it's signaling (-1 left, +1 right, 0 none)
+    signalTimer: 0,    // frames of blinker left before the merge commits
+    targetLane: null,  // lane it intends to merge into
   });
 }
 
-// On a wide highway, sometimes spawn a few cars at once (never all lanes,
-// so there's always a gap to thread through).
 function spawnWave() {
-  const lanes = [...LANES];
-  let count = 1;
-  if (Math.random() < Math.min(0.6, state.position / 40000)) count++;
-  if (Math.random() < Math.min(0.35, state.position / 80000)) count++;
-  count = Math.min(count, LANES.length - 2);
-  for (let n = 0; n < count; n++) {
-    const idx = Math.floor(Math.random() * lanes.length);
-    spawnCarInLane(lanes.splice(idx, 1)[0]);
+  const fl = fwdLanes();
+  if (trafficMode === "oneway") {
+    // Classic: 1–3 cars across the four lanes, always leaving a gap to thread.
+    const lanes = [...fl];
+    let count = 1;
+    if (Math.random() < Math.min(0.6, state.position / 40000)) count++;
+    if (Math.random() < Math.min(0.35, state.position / 80000)) count++;
+    count = Math.min(count, fl.length - 2);
+    for (let n = 0; n < count; n++)
+      spawnVehicle(lanes.splice(Math.floor(Math.random() * lanes.length), 1)[0], 1);
+    return;
   }
+  // Two-way: one forward vehicle (so a forward lane is always threadable), plus
+  // a chance of oncoming whose density ramps with distance.
+  spawnVehicle(fl[Math.floor(Math.random() * fl.length)], 1);
+  const oncChance = Math.min(0.75, 0.25 + state.position / 50000);
+  if (Math.random() < oncChance)
+    spawnVehicle(ONC_LANES[Math.floor(Math.random() * ONC_LANES.length)], -1);
 }
 
 function addPopup(x, y, text, color) {
@@ -536,17 +606,52 @@ function addPopup(x, y, text, color) {
 function resolveTrafficFollowing() {
   const lanes = new Map();
   for (const car of traffic) {
-    if (!lanes.has(car.lx)) lanes.set(car.lx, []);
-    lanes.get(car.lx).push(car);
+    const key = car.dir + ":" + car.lane; // each carriageway lane queues on its own
+    if (!lanes.has(key)) lanes.set(key, []);
+    lanes.get(key).push(car);
   }
   for (const list of lanes.values()) {
-    list.sort((a, b) => a.z - b.z); // back -> front
+    // Sort back -> front along the direction of travel (forward = +z, oncoming = -z).
+    list.sort((a, b) => (a.z - b.z) * a.dir);
     for (let i = list.length - 2; i >= 0; i--) {
       const behind = list[i], ahead = list[i + 1];
-      if (ahead.z - behind.z < TRAFFIC_GAP) {
-        behind.z = ahead.z - TRAFFIC_GAP;
+      if ((ahead.z - behind.z) * ahead.dir < TRAFFIC_GAP) {
+        behind.z = ahead.z - ahead.dir * TRAFFIC_GAP;
         behind.speed = Math.min(behind.speed, ahead.speed); // don't accelerate into it
       }
+    }
+  }
+}
+
+// Cars occasionally slide to the other lane in their carriageway; heavies don't
+// weave. A merge runs in three beats: signal (blinker only) -> commit -> glide.
+function updateLaneChange(car) {
+  if (car.kind !== "car") return;
+
+  // Mid-merge: glide toward the committed lane; blinker stays on until arrival.
+  if (car.lx !== car.lane) {
+    const d = car.lane - car.lx;
+    car.lx = Math.abs(d) <= LANE_CHANGE_RATE ? car.lane : car.lx + Math.sign(d) * LANE_CHANGE_RATE;
+    if (car.lx === car.lane) { car.signalDir = 0; car.targetLane = null; } // arrived
+    return;
+  }
+
+  // Signaling: flash the blinker a beat, then commit so the glide can begin.
+  if (car.signalTimer > 0) {
+    if (--car.signalTimer === 0) car.lane = car.targetLane;
+    return;
+  }
+
+  // Idle: maybe pick a neighbour lane and start signaling toward it.
+  if (--car.changeCD <= 0) {
+    car.changeCD = 120 + Math.floor(Math.random() * 180);
+    const dz = car.z - state.position;
+    const lead = car.dir < 0 ? 1100 : 650; // extra lead now that signaling costs time
+    const dest = adjacentLane(car.lane, laneGroupOf(car));
+    if (dz > lead && dest !== car.lane && Math.random() < 0.5) {
+      car.targetLane = dest;
+      car.signalDir = Math.sign(dest - car.lane); // +lx is world-right
+      car.signalTimer = SIGNAL_FRAMES;
     }
   }
 }
@@ -571,11 +676,6 @@ function updateScenery() {
   while (state.nextSceneryZ < state.position + SPAWN_DZ + 1500) {
     spawnScenery(state.nextSceneryZ);
     state.nextSceneryZ += SCENERY_STEP * (0.6 + Math.random() * 0.8);
-  }
-  // Lighting masts march down the center reservation, lighting both carriageways.
-  while (state.nextMastZ < state.position + SPAWN_DZ + 1500) {
-    scenery.push({ z: state.nextMastZ, lx: 0, type: "mast", prevDz: 1e9 });
-    state.nextMastZ += MAST_STEP;
   }
   for (let i = scenery.length - 1; i >= 0; i--) {
     if (scenery[i].z - state.position < -200) scenery.splice(i, 1);
@@ -630,8 +730,8 @@ function update() {
 
   updateScenery();
 
-  // Advance traffic, then keep same-lane cars from overlapping.
-  for (const car of traffic) car.z += car.speed;
+  // Advance traffic (oncoming travels toward you), weave, then de-overlap lanes.
+  for (const car of traffic) { car.z += car.speed * car.dir; updateLaneChange(car); }
   resolveTrafficFollowing();
 
   if (state.speed > state.topSpeed) state.topSpeed = state.speed;
@@ -650,24 +750,30 @@ function update() {
       const sp = worldToScreen(worldX(car.lx), 1.8, 0);
       const pan = clamp(car.lx - state.playerX, -1, 1);
 
-      if (lateral < HARD_TOLERANCE) {           // near head-on -> crash
+      const tol = car.halfW;                    // heavies are wider, so contact sooner
+      if (lateral < HARD_TOLERANCE + tol) {     // near head-on -> crash
         gameOver();
         return;
-      } else if (lateral < LANE_TOLERANCE) {    // sideswipe -> survive, but punished
+      } else if (lateral < LANE_TOLERANCE + tol) { // sideswipe -> survive, but punished
         sideswipe(pan);
       } else {                                  // clean pass
         state.passed++;
+        const lo = LANE_TOLERANCE + tol;        // inner edge of the near-miss band
         let closeness = 0;
         if (lateral < NEAR_MISS_RANGE) {        // near miss: build the combo
-          closeness = 1 - (lateral - LANE_TOLERANCE) / (NEAR_MISS_RANGE - LANE_TOLERANCE);
+          closeness = clamp(1 - (lateral - lo) / (NEAR_MISS_RANGE - lo), 0, 1);
           state.combo++;
           state.maxCombo = Math.max(state.maxCombo, state.combo);
           state.comboTimer = COMBO_WINDOW;
           state.mult = comboMult(state.combo);
-          const pts = Math.round((40 + closeness * 200) * (0.35 + 0.65 * speedFactor)) * state.mult;
+          const onc = car.dir < 0 ? ONCOMING_BONUS : 1; // threading oncoming pays more
+          const pts = Math.round((40 + closeness * 200) * (0.35 + 0.65 * speedFactor) * onc) * state.mult;
           state.score += pts;
           const tag = state.mult > 1 ? `x${state.mult} +${pts}` : `+${pts}`;
-          if (closeness > 0.6 && speedFactor > 0.6) {
+          if (car.dir < 0 && closeness > 0.4) {
+            addPopup(sp.x, sp.y, "ONCOMING! " + tag, "#ff6b6b");
+            state.flash = Math.max(state.flash, Math.max(closeness, 0.6));
+          } else if (closeness > 0.6 && speedFactor > 0.6) {
             addPopup(sp.x, sp.y, "NEAR MISS " + tag, "#ffd166");
             state.flash = Math.max(state.flash, closeness);
           } else {
@@ -682,18 +788,6 @@ function update() {
     car.prevDz = dz;
 
     if (dz < -300 || dz > SPAWN_DZ + 4000) traffic.splice(i, 1);
-  }
-
-  // Center masts are weave-around obstacles: only dead-center contact bites.
-  for (const o of scenery) {
-    if (o.type !== "mast") continue;
-    const dz = o.z - state.position;
-    if (o.prevDz > PLAYER_DZ && dz <= PLAYER_DZ) {
-      const lateral = Math.abs(state.playerX); // mast sits at lx 0
-      if (lateral < HARD_TOLERANCE) { gameOver(); return; }
-      else if (lateral < LANE_TOLERANCE) sideswipe(0);
-    }
-    o.prevDz = dz;
   }
 
   for (let i = popups.length - 1; i >= 0; i--) {
@@ -725,6 +819,7 @@ function cacheHUD() {
   hud = {
     score: document.getElementById("score"),
     speed: document.getElementById("speed"),
+    spdUnit: document.querySelector(".spd-unit"),
     dist: document.getElementById("dist"),
     spdFill: document.getElementById("spd-fill"),
     combo: document.getElementById("combo"),
@@ -735,7 +830,8 @@ function cacheHUD() {
 function updateHUD() {
   if (!hud) cacheHUD();
   hud.score.textContent = fmt(state.score);
-  hud.speed.textContent = Math.round(state.speed * 3);
+  hud.speed.textContent = spd(state.speed);
+  if (hud.spdUnit) hud.spdUnit.textContent = spdLabel();
   hud.dist.textContent = (state.position / DIST_DIV).toFixed(1);
   hud.spdFill.style.width = clamp(state.speed / state.maxSpeed, 0, 1) * 100 + "%";
   if (state.mult > 1) {
@@ -751,13 +847,26 @@ function updateHUD() {
 //  3D rendering (Three.js / WebGL)
 // ============================================================
 let scene, camera, renderer, fx, fxCtx, roadTex;
+let roadTexOne, roadTexTwo, roadMat; // one-way / two-way road textures + shared material
+let _blinkOn = true; // shared on/off phase so all active turn signals flash in sync
+
+// Point the road at the texture for the current traffic mode.
+function applyRoadMode() {
+  if (!roadMat) return;
+  roadTex = trafficMode === "twoway" ? roadTexTwo : roadTexOne;
+  roadMat.map = roadTex;
+  roadMat.needsUpdate = true;
+}
 let trafficGroup, sceneryGroup, playerMesh = null, playerCarId = null;
 let hemiLight, sunLight, grassMat;   // updated each frame by the biome engine
 let ready3d = false;
 const CAM_FOV = 55; // base camera FOV (widens with speed)
 
 // ---- Real car models (GLB). Drop files in models/<id>.glb — see models/README.md.
-// Until a file exists, the game falls back to the detailed procedural car below.
+// The game falls back to the detailed procedural car below, so to avoid 404s for
+// files that aren't there we only fetch ids listed in MODELS_AVAILABLE. Add an id
+// here once you've dropped its models/<id>.glb in.
+const MODELS_AVAILABLE = new Set([]);
 const gltfLoader = new GLTFLoader();
 const modelCache = {}; // id -> { mesh } | "loading" | "failed"
 const MODEL_CFG = {
@@ -774,27 +883,40 @@ const MODEL_CFG = {
 const _geo = {};
 const _paintMats = new Map();
 const _signMats = new Map();
-let _matGlass, _matTire, _matHead, _matTail, _matShadow, _matTrunk, _matLeaf, _matPost, _matSilhouette;
-let _matLampHead, _matLamp, _matLampGlow;
+let _matGlass, _matTire, _matHead, _matTail, _matShadow, _matTrunk, _matLeaf, _matPost, _matSilhouette, _matTrailer;
+let _matBodyDark, _matChrome; // rocker/bumper cladding + chrome trim (grille, hubs)
+const _matBlinker = new THREE.MeshBasicMaterial({ color: 0xffae2b }); // bright amber, blinks via visibility
 
 function initSharedAssets() {
-  _geo.skirt  = new THREE.BoxGeometry(2.12, 0.4, 4.5);
-  _geo.body   = new THREE.BoxGeometry(2.0, 0.62, 4.3);
-  _geo.hood   = new THREE.BoxGeometry(1.86, 0.3, 1.3);
-  _geo.cabin  = new THREE.BoxGeometry(1.7, 0.6, 2.1);
-  _geo.glass  = new THREE.BoxGeometry(1.74, 0.52, 1.72);
+  // Car body, sculpted from a few layered slabs (see buildProceduralCar).
+  _geo.skirt   = new THREE.BoxGeometry(1.96, 0.34, 4.4);  // dark rocker / lower body
+  _geo.body    = new THREE.BoxGeometry(2.04, 0.5, 4.46);  // main beltline mass
+  _geo.hood    = new THREE.BoxGeometry(1.9, 0.26, 1.6);   // front hood
+  _geo.deck    = new THREE.BoxGeometry(1.9, 0.28, 1.2);   // rear deck
+  _geo.cabin   = new THREE.BoxGeometry(1.66, 0.5, 2.2);   // greenhouse base
+  _geo.roof    = new THREE.BoxGeometry(1.46, 0.42, 1.5);  // tapered roof panel
+  _geo.glassF  = new THREE.BoxGeometry(1.54, 0.5, 0.12);  // windshield (raked)
+  _geo.glassR  = new THREE.BoxGeometry(1.52, 0.46, 0.12); // rear window (raked)
+  _geo.glassS  = new THREE.BoxGeometry(0.06, 0.34, 1.5);  // a side window
+  _geo.bumper  = new THREE.BoxGeometry(2.02, 0.32, 0.5);  // front/rear bumpers
+  _geo.grille  = new THREE.BoxGeometry(1.2, 0.22, 0.12);  // grille slab
+  _geo.hub     = new THREE.CylinderGeometry(0.17, 0.17, 0.36, 12); // wheel hub cap
+  _geo.spoiler = new THREE.BoxGeometry(1.66, 0.07, 0.34); // subtle rear lip
+  _geo.glass  = new THREE.BoxGeometry(1.74, 0.52, 1.72);  // (kept for the truck cab)
   _geo.wheel  = new THREE.CylinderGeometry(0.42, 0.42, 0.34, 18);
-  _geo.light  = new THREE.BoxGeometry(0.42, 0.22, 0.1);
-  _geo.shadow = new THREE.CircleGeometry(1.7, 24);
+  _geo.light  = new THREE.BoxGeometry(0.42, 0.2, 0.12);
+  _geo.shadow = new THREE.CircleGeometry(1.8, 24);
   _geo.trunk  = new THREE.CylinderGeometry(0.18, 0.26, 2.2, 8);
   _geo.leaf   = new THREE.IcosahedronGeometry(1.5, 0);
   _geo.post   = new THREE.CylinderGeometry(0.12, 0.12, 3, 8);
   _geo.sign   = new THREE.BoxGeometry(2.4, 1.4, 0.14);
-  _geo.mastPole = new THREE.CylinderGeometry(0.16, 0.24, 10, 10);
-  _geo.mastArm  = new THREE.BoxGeometry(4.6, 0.16, 0.16);
-  _geo.mastHead = new THREE.BoxGeometry(0.62, 0.34, 0.9);
-  _geo.mastLens = new THREE.BoxGeometry(0.52, 0.12, 0.7);
-  _geo.mastPool = new THREE.PlaneGeometry(9, 9);
+  // Heavy vehicles (trucks + buses) reuse these so spawning stays cheap.
+  _geo.truckCab     = new THREE.BoxGeometry(2.0, 1.5, 1.7);
+  _geo.truckTrailer = new THREE.BoxGeometry(2.2, 2.0, 5.2);
+  _geo.busBody      = new THREE.BoxGeometry(2.1, 1.9, 6.4);
+  _geo.busStripe    = new THREE.BoxGeometry(2.14, 0.55, 5.4);
+  _geo.bigWheel     = new THREE.CylinderGeometry(0.5, 0.5, 0.4, 16);
+  _geo.blinker      = new THREE.BoxGeometry(0.18, 0.16, 0.18);
 
   _matGlass  = new THREE.MeshStandardMaterial({ color: 0x10141b, metalness: 0.3, roughness: 0.12 });
   _matTire   = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.85 });
@@ -805,12 +927,9 @@ function initSharedAssets() {
   _matLeaf   = new THREE.MeshStandardMaterial({ color: 0x2f8f3e, roughness: 1, flatShading: true });
   _matPost   = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.6, metalness: 0.4 });
   _matSilhouette = new THREE.MeshStandardMaterial({ color: 0x0b0d12, roughness: 0.7, metalness: 0.2 });
-  // Lighting masts: dark housing, an emissive lens, and a soft pool of light on
-  // the road. The lens emissive + pool opacity are driven each frame by nightFactor.
-  _matLampHead = new THREE.MeshStandardMaterial({ color: 0x23272e, roughness: 0.5, metalness: 0.5 });
-  _matLamp     = new THREE.MeshStandardMaterial({ color: 0xfff0c0, emissive: 0xffd98a, emissiveIntensity: 0, roughness: 0.4 });
-  _matLampGlow = new THREE.MeshBasicMaterial({ map: makeRadialGlowTexture(), color: 0xffe6c0,
-    transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+  _matTrailer = new THREE.MeshStandardMaterial({ color: 0xdfe3e8, roughness: 0.7, metalness: 0.1 });
+  _matBodyDark = new THREE.MeshStandardMaterial({ color: 0x15171c, roughness: 0.6, metalness: 0.3 });
+  _matChrome   = new THREE.MeshStandardMaterial({ color: 0xb9c1cd, roughness: 0.28, metalness: 0.9 });
 }
 
 function paintMat(color) {
@@ -823,26 +942,97 @@ function signMat(color) {
   return _signMats.get(color);
 }
 
-// A proper 3D car: chassis + body + hood + cabin + glass + 4 wheels + lights.
+// A sculpted 3D car: layered body slabs, a tapered greenhouse with raked glass,
+// chrome trim, hub-capped wheels and a subtle lip — front faces -Z.
 function buildProceduralCar(color) {
   const g = new THREE.Group();
   const paint = paintMat(color);
-  const skirt = new THREE.Mesh(_geo.skirt, paint); skirt.position.y = 0.42; g.add(skirt);
-  const body  = new THREE.Mesh(_geo.body, paint);  body.position.y = 0.74; g.add(body);
-  const hood  = new THREE.Mesh(_geo.hood, paint);  hood.position.set(0, 0.95, -1.55); g.add(hood);
-  const cabin = new THREE.Mesh(_geo.cabin, paint); cabin.position.set(0, 1.15, 0.2); g.add(cabin);
-  const glass = new THREE.Mesh(_geo.glass, _matGlass); glass.position.set(0, 1.18, 0.2); g.add(glass);
-  for (const [x, z] of [[0.92, 1.45], [-0.92, 1.45], [0.92, -1.45], [-0.92, -1.45]]) {
+
+  const skirt = new THREE.Mesh(_geo.skirt, _matBodyDark); skirt.position.y = 0.34; g.add(skirt);
+  const body  = new THREE.Mesh(_geo.body, paint);  body.position.y = 0.62; g.add(body);
+  const hood  = new THREE.Mesh(_geo.hood, paint);  hood.position.set(0, 0.8, -1.42); g.add(hood);
+  const deck  = new THREE.Mesh(_geo.deck, paint);  deck.position.set(0, 0.82, 1.62); g.add(deck);
+
+  // Greenhouse: a cabin base capped by a narrower roof, set slightly back.
+  const cabin = new THREE.Mesh(_geo.cabin, paint); cabin.position.set(0, 1.04, 0.12); g.add(cabin);
+  const roof  = new THREE.Mesh(_geo.roof, paint);  roof.position.set(0, 1.32, 0.18); g.add(roof);
+
+  // Glass: raked windshield + rear window, plus a thin window down each side.
+  const windF = new THREE.Mesh(_geo.glassF, _matGlass); windF.position.set(0, 1.16, -0.86); windF.rotation.x = 0.62; g.add(windF);
+  const windR = new THREE.Mesh(_geo.glassR, _matGlass); windR.position.set(0, 1.18, 1.12); windR.rotation.x = -0.66; g.add(windR);
+  for (const sx of [0.81, -0.81]) {
+    const s = new THREE.Mesh(_geo.glassS, _matGlass); s.position.set(sx, 1.12, 0.18); g.add(s);
+  }
+
+  for (const [x, z] of [[0.94, 1.4], [-0.94, 1.4], [0.94, -1.4], [-0.94, -1.4]]) {
     const w = new THREE.Mesh(_geo.wheel, _matTire);
     w.rotation.z = Math.PI / 2; w.position.set(x, 0.42, z); g.add(w);
+    const hub = new THREE.Mesh(_geo.hub, _matChrome);
+    hub.rotation.z = Math.PI / 2; hub.position.set(x, 0.42, z); g.add(hub);
   }
-  for (const x of [0.6, -0.6]) {
-    const h = new THREE.Mesh(_geo.light, _matHead); h.position.set(x, 0.7, -2.18); g.add(h);
-    const t = new THREE.Mesh(_geo.light, _matTail); t.position.set(x, 0.78, 2.18); g.add(t);
+
+  // Bumpers, grille and a subtle rear lip for shape.
+  const fB = new THREE.Mesh(_geo.bumper, _matBodyDark); fB.position.set(0, 0.48, -2.12); g.add(fB);
+  const rB = new THREE.Mesh(_geo.bumper, _matBodyDark); rB.position.set(0, 0.48, 2.12); g.add(rB);
+  const grille = new THREE.Mesh(_geo.grille, _matChrome); grille.position.set(0, 0.66, -2.24); g.add(grille);
+  const lip = new THREE.Mesh(_geo.spoiler, _matBodyDark); lip.position.set(0, 0.98, 2.16); g.add(lip);
+
+  for (const x of [0.64, -0.64]) {
+    const h = new THREE.Mesh(_geo.light, _matHead); h.position.set(x, 0.68, -2.22); g.add(h);
+    const t = new THREE.Mesh(_geo.light, _matTail); t.position.set(x, 0.74, 2.22); g.add(t);
   }
   const sh = new THREE.Mesh(_geo.shadow, _matShadow);
   sh.rotation.x = -Math.PI / 2; sh.position.y = 0.02; g.add(sh);
+  // Turn indicators at all four corners (front + rear), hidden until a merge.
+  // placeTraffic flips them on by world side, blinking; the player car leaves
+  // them dark. Grouped by local side so the rotation for oncoming is handled.
+  const mkBlink = (x, z) => {
+    const m = new THREE.Mesh(_geo.blinker, _matBlinker);
+    m.position.set(x, 0.74, z); m.visible = false; g.add(m); return m;
+  };
+  g.userData.blinkR = [mkBlink(0.95, -2.0), mkBlink(0.95, 2.0)]; // local +X
+  g.userData.blinkL = [mkBlink(-0.95, -2.0), mkBlink(-0.95, 2.0)]; // local -X
   return g;
+}
+
+// Heavy vehicles share the car's orientation: front faces -Z (away from you).
+// placeTraffic spins oncoming ones 180° so their headlights point back at you.
+function buildTruck(color) {
+  const g = new THREE.Group();
+  const cab = new THREE.Mesh(_geo.truckCab, paintMat(color)); cab.position.set(0, 1.05, -2.6); g.add(cab);
+  const glass = new THREE.Mesh(_geo.glass, _matGlass);
+  glass.scale.set(1.06, 0.7, 0.28); glass.position.set(0, 1.35, -3.35); g.add(glass);
+  const trailer = new THREE.Mesh(_geo.truckTrailer, _matTrailer); trailer.position.set(0, 1.45, 0.9); g.add(trailer);
+  for (const [x, z] of [[1, -2.6], [-1, -2.6], [1, 0], [-1, 0], [1, 2.6], [-1, 2.6]]) {
+    const w = new THREE.Mesh(_geo.bigWheel, _matTire); w.rotation.z = Math.PI / 2; w.position.set(x, 0.5, z); g.add(w);
+  }
+  for (const x of [0.7, -0.7]) {
+    const h = new THREE.Mesh(_geo.light, _matHead); h.position.set(x, 0.7, -3.45); g.add(h);
+    const t = new THREE.Mesh(_geo.light, _matTail); t.position.set(x, 1.0, 3.5); g.add(t);
+  }
+  const sh = new THREE.Mesh(_geo.shadow, _matShadow);
+  sh.rotation.x = -Math.PI / 2; sh.position.y = 0.02; sh.scale.set(1.25, 2.1, 1); g.add(sh);
+  return g;
+}
+function buildBus(color) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(_geo.busBody, paintMat(color)); body.position.set(0, 1.5, 0); g.add(body);
+  const stripe = new THREE.Mesh(_geo.busStripe, _matGlass); stripe.position.set(0, 1.95, 0.2); g.add(stripe);
+  for (const [x, z] of [[1, -2.4], [-1, -2.4], [1, 2.4], [-1, 2.4]]) {
+    const w = new THREE.Mesh(_geo.bigWheel, _matTire); w.rotation.z = Math.PI / 2; w.position.set(x, 0.5, z); g.add(w);
+  }
+  for (const x of [0.7, -0.7]) {
+    const h = new THREE.Mesh(_geo.light, _matHead); h.position.set(x, 0.7, -3.25); g.add(h);
+    const t = new THREE.Mesh(_geo.light, _matTail); t.position.set(x, 0.7, 3.25); g.add(t);
+  }
+  const sh = new THREE.Mesh(_geo.shadow, _matShadow);
+  sh.rotation.x = -Math.PI / 2; sh.position.y = 0.02; sh.scale.set(1.2, 2.0, 1); g.add(sh);
+  return g;
+}
+function buildVehicle(o) {
+  if (o.kind === "truck") return buildTruck(o.color);
+  if (o.kind === "bus")   return buildBus(o.color);
+  return buildProceduralCar(o.color);
 }
 
 function buildTree() {
@@ -857,41 +1047,14 @@ function buildSign(color) {
   const board = new THREE.Mesh(_geo.sign, signMat(color)); board.position.y = 3.1; g.add(board);
   return g;
 }
-// A tall center-reservation mast with two arms, each reaching out over a
-// carriageway with a lamp head + glow cone so it lights traffic both ways.
-function buildMast() {
-  const g = new THREE.Group();
-  const pole = new THREE.Mesh(_geo.mastPole, _matPost); pole.position.y = 5; g.add(pole);
-  for (const s of [-1, 1]) { // one lit arm per carriageway
-    const arm  = new THREE.Mesh(_geo.mastArm, _matPost);  arm.position.set(s * 2.2, 9.4, 0); g.add(arm);
-    const head = new THREE.Mesh(_geo.mastHead, _matLampHead); head.position.set(s * 4.3, 9.25, 0); g.add(head);
-    const lens = new THREE.Mesh(_geo.mastLens, _matLamp); lens.position.set(s * 4.3, 9.0, 0); g.add(lens);
-    const pool = new THREE.Mesh(_geo.mastPool, _matLampGlow);
-    pool.rotation.x = -Math.PI / 2; pool.position.set(s * 4.3, 0.03, 0); g.add(pool);
-  }
-  return g;
-}
 function makeScenery(o) {
-  if (o.type === "mast") return buildMast();
   const m = o.type === "tree" ? buildTree() : buildSign(o.color);
   m.scale.setScalar(o.sizeVar * 1.5);
   return m;
 }
 
-// Soft radial falloff (white center -> transparent edge) for the lamp light pools.
-function makeRadialGlowTexture() {
-  const c = document.createElement("canvas"); c.width = c.height = 128;
-  const x = c.getContext("2d");
-  const g = x.createRadialGradient(64, 64, 3, 64, 64, 64);
-  g.addColorStop(0, "rgba(255,255,255,1)");
-  g.addColorStop(0.4, "rgba(255,255,255,0.45)");
-  g.addColorStop(1, "rgba(255,255,255,0)");
-  x.fillStyle = g; x.fillRect(0, 0, 128, 128);
-  return new THREE.CanvasTexture(c);
-}
-
 // Asphalt + lane markings baked into a tiling texture that scrolls with travel.
-function makeRoadTexture() {
+function makeRoadTexture(twoway) {
   const c = document.createElement("canvas"); c.width = 256; c.height = 256;
   const x = c.getContext("2d");
   x.fillStyle = "#3b4048"; x.fillRect(0, 0, 256, 256);
@@ -905,6 +1068,13 @@ function makeRoadTexture() {
     x.fillStyle = "#f0f0f0";
     x.fillRect(u * 256 - 3, 0, 6, 150); // dash (top) + gap (bottom) tiles into dashes
   }
+  if (twoway) { // solid double-yellow centerline: everything left of it is oncoming
+    x.fillStyle = "#e7b531";
+    x.fillRect(128 - 6, 0, 4, 256);
+    x.fillRect(128 + 2, 0, 4, 256);
+  }
+  // One-way leaves the center bare — the middle slot is the gap between the two
+  // inner lanes, not a lane of its own.
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = THREE.ClampToEdgeWrapping;
   tex.wrapT = THREE.RepeatWrapping;
@@ -928,8 +1098,10 @@ function initThree() {
 
   hemiLight = new THREE.HemisphereLight(0xbfe3ff, 0x4a6b3a, 1.0);
   scene.add(hemiLight);
+  // Doubles as the sun by day and the moon at night (color/intensity blended by
+  // the biome engine). Sits high and slightly ahead so the road stays lit.
   sunLight = new THREE.DirectionalLight(0xfff1da, 1.0);
-  sunLight.position.set(-40, 60, 20);
+  sunLight.position.set(-30, 90, -10);
   scene.add(sunLight);
 
   initSharedAssets();
@@ -943,23 +1115,17 @@ function initThree() {
   grass.position.set(0, -0.02, -(ROAD_LEN / 2 - 30));
   scene.add(grass);
 
-  roadTex = makeRoadTexture();
+  roadTexOne = makeRoadTexture(false);
+  roadTexTwo = makeRoadTexture(true);
+  roadMat = new THREE.MeshStandardMaterial({ roughness: 0.92 });
+  applyRoadMode(); // sets roadMat.map + roadTex for the current mode
   const road = new THREE.Mesh(
     new THREE.PlaneGeometry(ROAD_HALF_W * 2, ROAD_LEN),
-    new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.92 })
+    roadMat
   );
   road.rotation.x = -Math.PI / 2;
   road.position.set(0, 0, -(ROAD_LEN / 2 - 30));
   scene.add(road);
-
-  // Flush center reservation line dividing the two carriageways.
-  const median = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.7, ROAD_LEN),
-    new THREE.MeshStandardMaterial({ color: 0x6b6f52, roughness: 0.9 })
-  );
-  median.rotation.x = -Math.PI / 2;
-  median.position.set(0, 0.012, -(ROAD_LEN / 2 - 30));
-  scene.add(median);
 
   trafficGroup = new THREE.Group(); scene.add(trafficGroup);
   sceneryGroup = new THREE.Group(); scene.add(sceneryGroup);
@@ -985,7 +1151,8 @@ function onResize() {
 // Use a real GLB model when present; otherwise keep the procedural car.
 function loadCarModel(car) {
   const cfg = MODEL_CFG[car.id];
-  if (!cfg || modelCache[car.id]) return; // already loading / loaded / failed
+  // Skip ids with no GLB on disk (avoids 404s); fall back to the procedural car.
+  if (!cfg || !MODELS_AVAILABLE.has(car.id) || modelCache[car.id]) return;
   modelCache[car.id] = "loading";
   gltfLoader.load(cfg.url, (gltf) => {
     const m = gltf.scene;
@@ -1014,6 +1181,22 @@ function setPlayerCar(car) {
 
 function placeOnRoad(o) {
   o.mesh.position.set(worldX(o.lx), 0, worldZ(o.z - state.position));
+}
+
+// Like placeOnRoad, but oncoming traffic faces back toward you, and a merging
+// car flashes the indicator on its world-facing side.
+function placeTraffic(o) {
+  o.mesh.position.set(worldX(o.lx), 0, worldZ(o.z - state.position));
+  o.mesh.rotation.y = o.dir < 0 ? Math.PI : 0;
+  const ud = o.mesh.userData;
+  if (ud.blinkR) {
+    const sd = o.signalDir || 0;
+    // sd is a world side; oncoming cars are rotated 180°, so map to local side.
+    const litR = sd !== 0 && _blinkOn && sd * o.dir > 0;
+    const litL = sd !== 0 && _blinkOn && sd * o.dir < 0;
+    for (const m of ud.blinkR) m.visible = litR;
+    for (const m of ud.blinkL) m.visible = litL;
+  }
 }
 
 // Add/remove Three meshes so they mirror the game's traffic/scenery arrays.
@@ -1077,8 +1260,6 @@ function applyBiome(km) {
   nightFactor = t;
   _matHead.emissiveIntensity = 0.9 + nightFactor * 1.7; // headlights burn brighter after dark
   _matTail.emissiveIntensity = 0.9 + nightFactor * 1.1;
-  _matLamp.emissiveIntensity = nightFactor * 2.8;       // center masts switch on at dusk
-  _matLampGlow.opacity = nightFactor * 0.85;            // warm pool of light on the road
 
   const dom = (t < 0.5 ? a : b).name;
   if (dom !== biomeShown) showBiome(dom);
@@ -1101,10 +1282,11 @@ function render() {
   applyBiome(state.position / DIST_DIV);
   roadTex.offset.y = -(state.position * Z_SCALE) * (70 / ROAD_LEN); // scroll markings
 
-  reconcile(trafficGroup, traffic, (o) => buildProceduralCar(o.color), placeOnRoad);
+  _blinkOn = Math.floor(performance.now() / 280) % 2 === 0; // ~1.8 Hz signal flash
+  reconcile(trafficGroup, traffic, buildVehicle, placeTraffic);
   reconcile(sceneryGroup, scenery, makeScenery, (o) => {
     placeOnRoad(o);
-    o.mesh.rotation.y = o.type === "mast" ? 0 : (o.lx < 0 ? 0.3 : -0.3);
+    o.mesh.rotation.y = o.lx < 0 ? 0.3 : -0.3;
   });
 
   if (playerMesh) {
@@ -1214,7 +1396,6 @@ function resetRunState() {
   state.playerVX = 0;
   state.lastSpawnPos = 0;
   state.nextSceneryZ = 0;
-  state.nextMastZ = 0;
   state.flash = state.hitFlash = state.shake = 0;
   state.combo = 0; state.comboTimer = 0; state.mult = 1;
   state.maxCombo = 0; state.passed = 0; state.topSpeed = 0;
@@ -1276,7 +1457,7 @@ function showResults(isHi) {
         ${stat("Distance", (state.position / DIST_DIV).toFixed(1) + " km")}
         ${stat("Cars passed", state.passed)}
         ${stat("Best combo", "x" + comboMult(state.maxCombo))}
-        ${stat("Top speed", Math.round(state.topSpeed * 3) + " km/h")}
+        ${stat("Top speed", spd(state.topSpeed) + " " + spdLabel())}
         ${stat("Best ever", fmt(highScore))}
       </div>
       <div class="results-earn">+ <span class="cred">${CRED_ICO}<span class="cred-num" id="earn-num" data-val="0">0</span></span> CR earned</div>
@@ -1379,6 +1560,7 @@ function showMenu() {
       <div class="menu-btns">
         <button id="start-btn">Start</button>
         <button id="garage-btn" class="alt">Garage</button>
+        <button id="settings-btn" class="alt">Settings</button>
       </div>
       <p class="controls">↑/W gas · ↓/S brake · ←→/AD steer · M mute</p>
     </div>
@@ -1387,7 +1569,44 @@ function showMenu() {
   document.body.classList.remove("playing");
   document.getElementById("start-btn").addEventListener("click", startGame);
   document.getElementById("garage-btn").addEventListener("click", openGarage);
+  document.getElementById("settings-btn").addEventListener("click", showSettings);
   startIdle(); // bring the hero car / road to life behind the menu
+}
+
+function setTrafficMode(m) {
+  if (m === trafficMode) return;
+  trafficMode = m;
+  saveProgress();
+  applyRoadMode(); // swap the road texture (centerline) to match
+}
+
+// A simple settings screen rendered into the same overlay as the menu. Each
+// row is a segmented toggle; changes apply live and persist immediately.
+function showSettings() {
+  const overlay = document.getElementById("overlay");
+  const seg = (id, on, off, onSel) =>
+    `<div class="mode-toggle"><button id="${id}-a" class="mode-opt ${onSel ? "on" : ""}">${on}</button>` +
+    `<button id="${id}-b" class="mode-opt ${onSel ? "" : "on"}">${off}</button></div>`;
+  overlay.innerHTML = `
+    <div class="settings-panel">
+      <h2>Settings</h2>
+      <div class="set-row"><span class="set-label">Speed units</span>${seg("set-unit", "km/h", "mph", speedUnit === "kmh")}</div>
+      <div class="set-row"><span class="set-label">Traffic</span>${seg("set-mode", "Two-way", "One-way", trafficMode === "twoway")}</div>
+      <div class="set-row"><span class="set-label">Sound</span>${seg("set-snd", "On", "Off", !muted)}</div>
+      <button id="settings-back">Back</button>
+    </div>
+  `;
+  overlay.classList.remove("hidden");
+  document.body.classList.remove("playing");
+  const reopen = () => { saveProgress(); showSettings(); };
+  document.getElementById("set-unit-a").addEventListener("click", () => { speedUnit = "kmh"; reopen(); });
+  document.getElementById("set-unit-b").addEventListener("click", () => { speedUnit = "mph"; reopen(); });
+  document.getElementById("set-mode-a").addEventListener("click", () => { setTrafficMode("twoway"); showSettings(); });
+  document.getElementById("set-mode-b").addEventListener("click", () => { setTrafficMode("oneway"); showSettings(); });
+  document.getElementById("set-snd-a").addEventListener("click", () => { if (muted) toggleMute(); reopen(); });
+  document.getElementById("set-snd-b").addEventListener("click", () => { if (!muted) toggleMute(); reopen(); });
+  document.getElementById("settings-back").addEventListener("click", showMenu);
+  startIdle(); // keep the hero road alive behind the panel
 }
 
 function statBars(c) {
@@ -1400,12 +1619,12 @@ function statBars(c) {
     return `<div class="stat"><span class="stat-k">${label}</span><div class="bar"><i style="width:${pct}%"></i></div><span class="stat-v">${text}</span></div>`;
   };
   return bar("ACC", s.accel, STAT_CEIL.accel, r10(s.accel, STAT_CEIL.accel))
-    + bar("SPD", s.maxSpeed, STAT_CEIL.maxSpeed, Math.round(s.maxSpeed * 3) + " km/h")
+    + bar("SPD", s.maxSpeed, STAT_CEIL.maxSpeed, spd(s.maxSpeed) + " " + spdLabel())
     + bar("HND", s.handling, STAT_CEIL.handling, r10(s.handling, STAT_CEIL.handling));
 }
 
 function gainText(c, track) {
-  if (track.key === "speed") return `+${Math.round(c.maxSpeed * 0.08 * 3)} km/h`;
+  if (track.key === "speed") return `+${spd(c.maxSpeed * 0.08)} ${spdLabel()}`;
   if (track.key === "engine") return `+12% accel`;
   return `+8% grip`;
 }

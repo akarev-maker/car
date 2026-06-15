@@ -218,6 +218,68 @@ button:disabled {
   gap: 12px;
 }
 
+/* ---- Traffic-mode segmented toggle ---- */
+.mode-toggle {
+  display: inline-flex;
+  gap: 4px;
+  margin-top: 14px;
+  padding: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 209, 102, 0.35);
+  border-radius: 999px;
+}
+.mode-toggle .mode-opt {
+  margin: 0;
+  padding: 7px 18px;
+  font-size: 14px;
+  font-weight: bold;
+  color: #cdd3df;
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+}
+.mode-toggle .mode-opt:hover {
+  background: rgba(255, 209, 102, 0.12);
+}
+.mode-toggle .mode-opt.on {
+  color: #1a1a2e;
+  background: #ffd166;
+}
+
+/* ---- Settings panel ---- */
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 28px 26px;
+  background: rgba(12, 14, 22, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  backdrop-filter: blur(6px);
+}
+.settings-panel h2 {
+  margin: 0 0 6px;
+  font-size: 26px;
+  letter-spacing: 1px;
+}
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  width: 320px;
+  max-width: 78vw;
+}
+.set-label {
+  font-size: 16px;
+  font-weight: bold;
+  color: #cdd3df;
+}
+.settings-panel .mode-toggle {
+  margin-top: 0;
+}
+
 /* ---- Garage ---- */
 #garage {
   overflow-y: auto;

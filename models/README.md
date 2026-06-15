@@ -1,9 +1,13 @@
 # Car models (`.glb`)
 
-The game loads a real 3D model for each car from this folder. Until a file
-exists, it falls back to a detailed **procedural** car automatically — so the
-game works right now with zero downloads. Drop a file in and it's used on the
-next run (the selected car even hot-swaps mid-game once loaded).
+The game can load a real 3D model for each car from this folder, but by default
+it uses the detailed **procedural** cars — so the game works right now with zero
+downloads and no failed network requests.
+
+To use a real model: drop `models/<id>.glb` in, then add that id to
+`MODELS_AVAILABLE` in `game.js` (next to `MODEL_CFG`). It's used on the next run
+(the selected car even hot-swaps mid-game once loaded). The `MODELS_AVAILABLE`
+gate is what stops the game from requesting `.glb` files that aren't there.
 
 ## File names
 
