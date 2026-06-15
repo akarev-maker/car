@@ -1357,9 +1357,26 @@ function isBlocked() {
 }
 
 // ---- Loop ----
-function loop() {
+// The simulation is written in per-frame increments tuned for 60 FPS. To keep
+// it identical on every device (a 144 Hz monitor would otherwise run 2.4x
+// faster than a 60 Hz phone), we advance physics on a fixed 60 Hz timestep and
+// run as many steps as real time has accrued — never tied to the refresh rate.
+const FIXED_DT = 1000 / 60;   // ms per simulation step
+const MAX_STEPS = 5;          // clamp catch-up after a stall (no spiral of death)
+let _loopPrev = 0, _accum = 0;
+function loop(now) {
   if (!state.running) return;
-  if (!isBlocked()) update();
+  if (!_loopPrev) _loopPrev = now;
+  _accum += now - _loopPrev;
+  _loopPrev = now;
+  if (_accum > FIXED_DT * MAX_STEPS) _accum = FIXED_DT * MAX_STEPS; // drop backlog
+  let steps = 0;
+  while (_accum >= FIXED_DT && steps < MAX_STEPS) {
+    if (!isBlocked()) update();
+    _accum -= FIXED_DT;
+    steps++;
+    if (!state.running) break;   // update() may end the run mid-step
+  }
   if (state.running) render();
   requestAnimationFrame(loop);
 }
@@ -1418,7 +1435,8 @@ function startGame() {
   document.getElementById("overlay").classList.add("hidden");
   document.getElementById("results").classList.add("hidden");
   updateHUD();
-  loop();
+  _loopPrev = 0; _accum = 0;   // fresh clock so the first frame doesn't burst catch-up
+  requestAnimationFrame(loop);
 }
 
 function gameOver() { endRun(true); }   // crashed into traffic
