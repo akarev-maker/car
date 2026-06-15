@@ -626,6 +626,19 @@ function resolveTrafficFollowing() {
 
 // Cars occasionally slide to the other lane in their carriageway; heavies don't
 // weave. A merge runs in three beats: signal (blinker only) -> commit -> glide.
+// True only if `lane` has room around this car's z for it to slot in without the
+// follower having to snap anyone's z to de-overlap (that snap is what made merges
+// look like teleporting). We check both a car's committed lane and where it's
+// visually sitting, so we don't merge on top of someone mid-merge either.
+function laneClearForMerge(car, lane) {
+  for (const c of traffic) {
+    if (c === car || c.dir !== car.dir) continue;
+    const occupies = c.lane === lane || Math.abs(c.lx - lane) < 0.2;
+    if (occupies && Math.abs(c.z - car.z) < TRAFFIC_GAP * 1.3) return false;
+  }
+  return true;
+}
+
 function updateLaneChange(car) {
   if (car.kind !== "car") return;
 
@@ -637,9 +650,14 @@ function updateLaneChange(car) {
     return;
   }
 
-  // Signaling: flash the blinker a beat, then commit so the glide can begin.
+  // Signaling: flash the blinker a beat, then commit so the glide can begin —
+  // but only if the gap is still there. Otherwise abandon the merge cleanly
+  // (no snap into an occupied lane) and try again later.
   if (car.signalTimer > 0) {
-    if (--car.signalTimer === 0) car.lane = car.targetLane;
+    if (--car.signalTimer === 0) {
+      if (laneClearForMerge(car, car.targetLane)) car.lane = car.targetLane;
+      else { car.signalDir = 0; car.targetLane = null; }
+    }
     return;
   }
 
@@ -649,7 +667,7 @@ function updateLaneChange(car) {
     const dz = car.z - state.position;
     const lead = car.dir < 0 ? 1100 : 650; // extra lead now that signaling costs time
     const dest = adjacentLane(car.lane, laneGroupOf(car));
-    if (dz > lead && dest !== car.lane && Math.random() < 0.5) {
+    if (dz > lead && dest !== car.lane && laneClearForMerge(car, dest) && Math.random() < 0.5) {
       car.targetLane = dest;
       car.signalDir = Math.sign(dest - car.lane); // +lx is world-right
       car.signalTimer = SIGNAL_FRAMES;
@@ -1317,21 +1335,6 @@ function drawFx(sf = 0) {
   if (state.hitFlash > 0.02) { // red on a sideswipe
     fxCtx.fillStyle = `rgba(255,40,40,${state.hitFlash * 0.35})`;
     fxCtx.fillRect(0, 0, fx.width, fx.height);
-  }
-
-  if (sf > 0.55) { // radial speed streaks
-    const a = (sf - 0.55) / 0.45;
-    fxCtx.strokeStyle = `rgba(255,255,255,${0.1 * a})`;
-    fxCtx.lineWidth = 2;
-    const cx = fx.width / 2, cy = fx.height * 0.42;
-    for (let i = 0; i < 14; i++) {
-      const ang = (i / 14) * Math.PI * 2 + state.position * 0.001;
-      const r0 = 120 + (i % 3) * 30, r1 = r0 + 60 + a * 130;
-      fxCtx.beginPath();
-      fxCtx.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0);
-      fxCtx.lineTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
-      fxCtx.stroke();
-    }
   }
 
   if (state.flash > 0.02) { // gold near-miss border
