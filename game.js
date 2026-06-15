@@ -9,7 +9,7 @@ import { Reflector } from "three/addons/objects/Reflector.js";
 const canvas = document.getElementById("game");
 
 // ---- World layout (real 3D, Three.js) ----
-const LANES = [-0.8, -0.4, 0, 0.4, 0.8]; // 5-lane highway (lateral units; ±1 = road edges)
+const LANES = [-0.8, -0.4, 0.4, 0.8]; // 4 lanes split by a center reservation (±1 = road edges)
 const SPAWN_DZ = 4800;   // how far ahead (game-z units) traffic appears
 const ROAD_HALF_W = 9;   // world half-width of the asphalt (lx = ±1)
 const ROAD_LEN = 660;    // world length of the road / ground meshes
@@ -25,7 +25,7 @@ const TRAFFIC_COLORS = ["#ef476f", "#06d6a0", "#118ab2", "#ffd166", "#9b5de5", "
 // ---- Roadside scenery ----
 const SIGN_COLORS = ["#2e7d32", "#1565c0", "#f9a825"]; // highway / info / warning
 const SCENERY_STEP = 150; // average spacing between roadside objects (world units)
-const LAMP_STEP = 320;    // spacing between street-lamp pairs (world units)
+const MAST_STEP = 480;    // spacing between center lighting masts (game-z units)
 
 // ---- Driving feel ----
 const ACCEL = 1.3;
@@ -150,7 +150,7 @@ const state = {
   playerVX: 0,
   lastSpawnPos: 0,
   nextSceneryZ: 0,
-  nextLampZ: 0,
+  nextMastZ: 0,
   flash: 0,
   hitFlash: 0,      // red flash on a glancing hit
   shake: 0,         // camera shake amount
@@ -571,11 +571,10 @@ function updateScenery() {
     spawnScenery(state.nextSceneryZ);
     state.nextSceneryZ += SCENERY_STEP * (0.6 + Math.random() * 0.8);
   }
-  // Street lamps march in evenly-spaced pairs down both shoulders.
-  while (state.nextLampZ < state.position + SPAWN_DZ + 1500) {
-    scenery.push({ z: state.nextLampZ, lx: -1.25, type: "lamp" });
-    scenery.push({ z: state.nextLampZ, lx:  1.25, type: "lamp" });
-    state.nextLampZ += LAMP_STEP;
+  // Lighting masts march down the center reservation, lighting both carriageways.
+  while (state.nextMastZ < state.position + SPAWN_DZ + 1500) {
+    scenery.push({ z: state.nextMastZ, lx: 0, type: "mast", prevDz: 1e9 });
+    state.nextMastZ += MAST_STEP;
   }
   for (let i = scenery.length - 1; i >= 0; i--) {
     if (scenery[i].z - state.position < -200) scenery.splice(i, 1);
@@ -684,6 +683,18 @@ function update() {
     if (dz < -300 || dz > SPAWN_DZ + 4000) traffic.splice(i, 1);
   }
 
+  // Center masts are weave-around obstacles: only dead-center contact bites.
+  for (const o of scenery) {
+    if (o.type !== "mast") continue;
+    const dz = o.z - state.position;
+    if (o.prevDz > PLAYER_DZ && dz <= PLAYER_DZ) {
+      const lateral = Math.abs(state.playerX); // mast sits at lx 0
+      if (lateral < HARD_TOLERANCE) { gameOver(); return; }
+      else if (lateral < LANE_TOLERANCE) sideswipe(0);
+    }
+    o.prevDz = dz;
+  }
+
   for (let i = popups.length - 1; i >= 0; i--) {
     popups[i].life -= 0.02;
     popups[i].y -= 0.6;
@@ -778,11 +789,11 @@ function initSharedAssets() {
   _geo.leaf   = new THREE.IcosahedronGeometry(1.5, 0);
   _geo.post   = new THREE.CylinderGeometry(0.12, 0.12, 3, 8);
   _geo.sign   = new THREE.BoxGeometry(2.4, 1.4, 0.14);
-  _geo.lampPost = new THREE.CylinderGeometry(0.13, 0.17, 6, 8);
-  _geo.lampArm  = new THREE.BoxGeometry(2.6, 0.13, 0.13);
-  _geo.lampHead = new THREE.BoxGeometry(0.55, 0.3, 0.8);
-  _geo.lampLens = new THREE.BoxGeometry(0.46, 0.1, 0.62);
-  _geo.lampGlow = new THREE.ConeGeometry(1.7, 4.6, 12, 1, true);
+  _geo.mastPole = new THREE.CylinderGeometry(0.16, 0.24, 10, 10);
+  _geo.mastArm  = new THREE.BoxGeometry(4.6, 0.16, 0.16);
+  _geo.mastHead = new THREE.BoxGeometry(0.62, 0.34, 0.9);
+  _geo.mastLens = new THREE.BoxGeometry(0.52, 0.12, 0.7);
+  _geo.mastPool = new THREE.PlaneGeometry(9, 9);
 
   _matGlass  = new THREE.MeshStandardMaterial({ color: 0x10141b, metalness: 0.3, roughness: 0.12 });
   _matTire   = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.85 });
@@ -793,11 +804,12 @@ function initSharedAssets() {
   _matLeaf   = new THREE.MeshStandardMaterial({ color: 0x2f8f3e, roughness: 1, flatShading: true });
   _matPost   = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.6, metalness: 0.4 });
   _matSilhouette = new THREE.MeshStandardMaterial({ color: 0x0b0d12, roughness: 0.7, metalness: 0.2 });
-  // Street lamps: dark housing, an emissive lens, and a soft glow cone. The
-  // lens emissive + cone opacity are driven each frame by nightFactor.
+  // Lighting masts: dark housing, an emissive lens, and a soft pool of light on
+  // the road. The lens emissive + pool opacity are driven each frame by nightFactor.
   _matLampHead = new THREE.MeshStandardMaterial({ color: 0x23272e, roughness: 0.5, metalness: 0.5 });
   _matLamp     = new THREE.MeshStandardMaterial({ color: 0xfff0c0, emissive: 0xffd98a, emissiveIntensity: 0, roughness: 0.4 });
-  _matLampGlow = new THREE.MeshBasicMaterial({ color: 0xffe6a8, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
+  _matLampGlow = new THREE.MeshBasicMaterial({ map: makeRadialGlowTexture(), color: 0xffe6c0,
+    transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
 }
 
 function paintMat(color) {
@@ -844,23 +856,37 @@ function buildSign(color) {
   const board = new THREE.Mesh(_geo.sign, signMat(color)); board.position.y = 3.1; g.add(board);
   return g;
 }
-// A roadside lamp post whose arm reaches over the shoulder toward the road.
-// `side` is the sign of its lx (−1 left, +1 right); the arm reaches inward.
-function buildStreetlight(side) {
+// A tall center-reservation mast with two arms, each reaching out over a
+// carriageway with a lamp head + glow cone so it lights traffic both ways.
+function buildMast() {
   const g = new THREE.Group();
-  const reach = -side; // toward road center
-  const pole = new THREE.Mesh(_geo.lampPost, _matPost); pole.position.y = 3; g.add(pole);
-  const arm  = new THREE.Mesh(_geo.lampArm, _matPost);  arm.position.set(reach * 1.3, 5.85, 0); g.add(arm);
-  const head = new THREE.Mesh(_geo.lampHead, _matLampHead); head.position.set(reach * 2.5, 5.75, 0); g.add(head);
-  const lens = new THREE.Mesh(_geo.lampLens, _matLamp); lens.position.set(reach * 2.5, 5.55, 0); g.add(lens);
-  const glow = new THREE.Mesh(_geo.lampGlow, _matLampGlow); glow.position.set(reach * 2.5, 3.3, 0); g.add(glow);
+  const pole = new THREE.Mesh(_geo.mastPole, _matPost); pole.position.y = 5; g.add(pole);
+  for (const s of [-1, 1]) { // one lit arm per carriageway
+    const arm  = new THREE.Mesh(_geo.mastArm, _matPost);  arm.position.set(s * 2.2, 9.4, 0); g.add(arm);
+    const head = new THREE.Mesh(_geo.mastHead, _matLampHead); head.position.set(s * 4.3, 9.25, 0); g.add(head);
+    const lens = new THREE.Mesh(_geo.mastLens, _matLamp); lens.position.set(s * 4.3, 9.0, 0); g.add(lens);
+    const pool = new THREE.Mesh(_geo.mastPool, _matLampGlow);
+    pool.rotation.x = -Math.PI / 2; pool.position.set(s * 4.3, 0.03, 0); g.add(pool);
+  }
   return g;
 }
 function makeScenery(o) {
-  if (o.type === "lamp") return buildStreetlight(Math.sign(o.lx));
+  if (o.type === "mast") return buildMast();
   const m = o.type === "tree" ? buildTree() : buildSign(o.color);
   m.scale.setScalar(o.sizeVar * 1.5);
   return m;
+}
+
+// Soft radial falloff (white center -> transparent edge) for the lamp light pools.
+function makeRadialGlowTexture() {
+  const c = document.createElement("canvas"); c.width = c.height = 128;
+  const x = c.getContext("2d");
+  const g = x.createRadialGradient(64, 64, 3, 64, 64, 64);
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.4, "rgba(255,255,255,0.45)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  x.fillStyle = g; x.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
 }
 
 // Asphalt + lane markings baked into a tiling texture that scrolls with travel.
@@ -924,6 +950,15 @@ function initThree() {
   road.rotation.x = -Math.PI / 2;
   road.position.set(0, 0, -(ROAD_LEN / 2 - 30));
   scene.add(road);
+
+  // Flush center reservation line dividing the two carriageways.
+  const median = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.7, ROAD_LEN),
+    new THREE.MeshStandardMaterial({ color: 0x6b6f52, roughness: 0.9 })
+  );
+  median.rotation.x = -Math.PI / 2;
+  median.position.set(0, 0.012, -(ROAD_LEN / 2 - 30));
+  scene.add(median);
 
   trafficGroup = new THREE.Group(); scene.add(trafficGroup);
   sceneryGroup = new THREE.Group(); scene.add(sceneryGroup);
@@ -1041,8 +1076,8 @@ function applyBiome(km) {
   nightFactor = t;
   _matHead.emissiveIntensity = 0.9 + nightFactor * 1.7; // headlights burn brighter after dark
   _matTail.emissiveIntensity = 0.9 + nightFactor * 1.1;
-  _matLamp.emissiveIntensity = nightFactor * 2.8;       // street lamps switch on at dusk
-  _matLampGlow.opacity = nightFactor * 0.18;
+  _matLamp.emissiveIntensity = nightFactor * 2.8;       // center masts switch on at dusk
+  _matLampGlow.opacity = nightFactor * 0.85;            // warm pool of light on the road
 
   const dom = (t < 0.5 ? a : b).name;
   if (dom !== biomeShown) showBiome(dom);
@@ -1068,7 +1103,7 @@ function render() {
   reconcile(trafficGroup, traffic, (o) => buildProceduralCar(o.color), placeOnRoad);
   reconcile(sceneryGroup, scenery, makeScenery, (o) => {
     placeOnRoad(o);
-    o.mesh.rotation.y = o.type === "lamp" ? 0 : (o.lx < 0 ? 0.3 : -0.3);
+    o.mesh.rotation.y = o.type === "mast" ? 0 : (o.lx < 0 ? 0.3 : -0.3);
   });
 
   if (playerMesh) {
@@ -1178,7 +1213,7 @@ function resetRunState() {
   state.playerVX = 0;
   state.lastSpawnPos = 0;
   state.nextSceneryZ = 0;
-  state.nextLampZ = 0;
+  state.nextMastZ = 0;
   state.flash = state.hitFlash = state.shake = 0;
   state.combo = 0; state.comboTimer = 0; state.mult = 1;
   state.maxCombo = 0; state.passed = 0; state.topSpeed = 0;
