@@ -25,6 +25,7 @@ const TRAFFIC_COLORS = ["#ef476f", "#06d6a0", "#118ab2", "#ffd166", "#9b5de5", "
 // ---- Roadside scenery ----
 const SIGN_COLORS = ["#2e7d32", "#1565c0", "#f9a825"]; // highway / info / warning
 const SCENERY_STEP = 150; // average spacing between roadside objects (world units)
+const LAMP_STEP = 320;    // spacing between street-lamp pairs (world units)
 
 // ---- Driving feel ----
 const ACCEL = 1.3;
@@ -149,6 +150,7 @@ const state = {
   playerVX: 0,
   lastSpawnPos: 0,
   nextSceneryZ: 0,
+  nextLampZ: 0,
   flash: 0,
   hitFlash: 0,      // red flash on a glancing hit
   shake: 0,         // camera shake amount
@@ -167,11 +169,10 @@ const DIST_DIV = 16000;     // game-units per displayed "km"
 const CREDIT_RATE = 0.125;  // credits earned = score x this (score stays the bragging number)
 
 // ---- Biome engine -------------------------------------------------------
-// The world continuously cycles through a ring of biomes as you drive. Each
-// entry is a full set of environment params; every frame the engine cosine-
-// blends between neighbours so the world is always gently shifting. Drop another
-// biome in the ring and it slots straight in — Day<->Night is the first two.
-const BIOME_CYCLE_KM = 6;     // distance for one full day->night->day lap
+// The world continuously cycles between the biomes as you drive. Each entry is
+// a full set of environment params; every frame the engine blends Day->Night by
+// a curve that holds night far longer than day, with smooth dusk/dawn fades.
+const BIOME_CYCLE_KM = 10;    // distance for one full day->night->day lap (slow)
 const BIOMES = [
   { name: "Day",
     sky: 0x86c8e8, fogNear: 70, fogFar: 300,
@@ -570,6 +571,12 @@ function updateScenery() {
     spawnScenery(state.nextSceneryZ);
     state.nextSceneryZ += SCENERY_STEP * (0.6 + Math.random() * 0.8);
   }
+  // Street lamps march in evenly-spaced pairs down both shoulders.
+  while (state.nextLampZ < state.position + SPAWN_DZ + 1500) {
+    scenery.push({ z: state.nextLampZ, lx: -1.25, type: "lamp" });
+    scenery.push({ z: state.nextLampZ, lx:  1.25, type: "lamp" });
+    state.nextLampZ += LAMP_STEP;
+  }
   for (let i = scenery.length - 1; i >= 0; i--) {
     if (scenery[i].z - state.position < -200) scenery.splice(i, 1);
   }
@@ -756,6 +763,7 @@ const _geo = {};
 const _paintMats = new Map();
 const _signMats = new Map();
 let _matGlass, _matTire, _matHead, _matTail, _matShadow, _matTrunk, _matLeaf, _matPost, _matSilhouette;
+let _matLampHead, _matLamp, _matLampGlow;
 
 function initSharedAssets() {
   _geo.skirt  = new THREE.BoxGeometry(2.12, 0.4, 4.5);
@@ -770,6 +778,11 @@ function initSharedAssets() {
   _geo.leaf   = new THREE.IcosahedronGeometry(1.5, 0);
   _geo.post   = new THREE.CylinderGeometry(0.12, 0.12, 3, 8);
   _geo.sign   = new THREE.BoxGeometry(2.4, 1.4, 0.14);
+  _geo.lampPost = new THREE.CylinderGeometry(0.13, 0.17, 6, 8);
+  _geo.lampArm  = new THREE.BoxGeometry(2.6, 0.13, 0.13);
+  _geo.lampHead = new THREE.BoxGeometry(0.55, 0.3, 0.8);
+  _geo.lampLens = new THREE.BoxGeometry(0.46, 0.1, 0.62);
+  _geo.lampGlow = new THREE.ConeGeometry(1.7, 4.6, 12, 1, true);
 
   _matGlass  = new THREE.MeshStandardMaterial({ color: 0x10141b, metalness: 0.3, roughness: 0.12 });
   _matTire   = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.85 });
@@ -780,6 +793,11 @@ function initSharedAssets() {
   _matLeaf   = new THREE.MeshStandardMaterial({ color: 0x2f8f3e, roughness: 1, flatShading: true });
   _matPost   = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.6, metalness: 0.4 });
   _matSilhouette = new THREE.MeshStandardMaterial({ color: 0x0b0d12, roughness: 0.7, metalness: 0.2 });
+  // Street lamps: dark housing, an emissive lens, and a soft glow cone. The
+  // lens emissive + cone opacity are driven each frame by nightFactor.
+  _matLampHead = new THREE.MeshStandardMaterial({ color: 0x23272e, roughness: 0.5, metalness: 0.5 });
+  _matLamp     = new THREE.MeshStandardMaterial({ color: 0xfff0c0, emissive: 0xffd98a, emissiveIntensity: 0, roughness: 0.4 });
+  _matLampGlow = new THREE.MeshBasicMaterial({ color: 0xffe6a8, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
 }
 
 function paintMat(color) {
@@ -826,7 +844,20 @@ function buildSign(color) {
   const board = new THREE.Mesh(_geo.sign, signMat(color)); board.position.y = 3.1; g.add(board);
   return g;
 }
+// A roadside lamp post whose arm reaches over the shoulder toward the road.
+// `side` is the sign of its lx (−1 left, +1 right); the arm reaches inward.
+function buildStreetlight(side) {
+  const g = new THREE.Group();
+  const reach = -side; // toward road center
+  const pole = new THREE.Mesh(_geo.lampPost, _matPost); pole.position.y = 3; g.add(pole);
+  const arm  = new THREE.Mesh(_geo.lampArm, _matPost);  arm.position.set(reach * 1.3, 5.85, 0); g.add(arm);
+  const head = new THREE.Mesh(_geo.lampHead, _matLampHead); head.position.set(reach * 2.5, 5.75, 0); g.add(head);
+  const lens = new THREE.Mesh(_geo.lampLens, _matLamp); lens.position.set(reach * 2.5, 5.55, 0); g.add(lens);
+  const glow = new THREE.Mesh(_geo.lampGlow, _matLampGlow); glow.position.set(reach * 2.5, 3.3, 0); g.add(glow);
+  return g;
+}
 function makeScenery(o) {
+  if (o.type === "lamp") return buildStreetlight(Math.sign(o.lx));
   const m = o.type === "tree" ? buildTree() : buildSign(o.color);
   m.scale.setScalar(o.sizeVar * 1.5);
   return m;
@@ -969,19 +1000,27 @@ function reconcile(group, list, make, place) {
 // Reused so the per-frame blend allocates nothing.
 const _biomeSky = new THREE.Color(0x86c8e8);
 const _biomeTmp = new THREE.Color();
-let nightFactor = 0;          // 0 day .. 1 night; drives the headlight glow
+let nightFactor = 0;          // 0 day .. 1 night; drives headlight + street-lamp glow
 let biomeShown = null;        // dominant biome currently named in the HUD
+const smoothstep = (t) => t * t * (3 - 2 * t);
 
-// Sample the biome ring at the given distance (km) and push the blended
-// environment onto the scene, lights, grass and shared car materials.
+// Map progress through one day (u: 0..1) to a night factor (0 day .. 1 night).
+// Night owns the long middle stretch; day is a short window with quick dusk/dawn.
+function nightFactorAt(u) {
+  const duskA = 0.12, duskB = 0.34, dawnA = 0.80, dawnB = 0.99;
+  if (u < duskA) return 0;                                          // day
+  if (u < duskB) return smoothstep((u - duskA) / (duskB - duskA));  // dusk -> night
+  if (u < dawnA) return 1;                                          // night (long)
+  if (u < dawnB) return 1 - smoothstep((u - dawnA) / (dawnB - dawnA)); // dawn -> day
+  return 0;
+}
+
+// Sample the day/night curve at the given distance (km) and push the blended
+// environment onto the scene, lights, grass and shared car/lamp materials.
 function applyBiome(km) {
-  const n = BIOMES.length;
-  const f = ((km / BIOME_CYCLE_KM) % 1 + 1) % 1 * n; // wrapped position on the ring
-  const i = Math.floor(f);
-  // Continuous, ever-moving blend — no plateaus, so the world is always visibly
-  // shifting. Cosine easing keeps each handoff smooth at the pure day/night ends.
-  const t = (1 - Math.cos((f - i) * Math.PI)) / 2;
-  const a = BIOMES[i % n], b = BIOMES[(i + 1) % n];
+  const u = ((km / BIOME_CYCLE_KM) % 1 + 1) % 1; // progress through one day, 0..1
+  const t = nightFactorAt(u);                    // 0 = full day, 1 = full night
+  const a = BIOMES[0], b = BIOMES[BIOMES.length - 1]; // Day -> Night
   const mix = (ka, kb) => ka + (kb - ka) * t;
 
   _biomeSky.set(a.sky).lerp(_biomeTmp.set(b.sky), t);
@@ -999,9 +1038,11 @@ function applyBiome(km) {
 
   grassMat.color.set(a.grass).lerp(_biomeTmp.set(b.grass), t);
 
-  nightFactor = mix(a.night, b.night);
-  _matHead.emissiveIntensity = 0.9 + nightFactor * 1.7; // lamps burn brighter after dark
+  nightFactor = t;
+  _matHead.emissiveIntensity = 0.9 + nightFactor * 1.7; // headlights burn brighter after dark
   _matTail.emissiveIntensity = 0.9 + nightFactor * 1.1;
+  _matLamp.emissiveIntensity = nightFactor * 2.8;       // street lamps switch on at dusk
+  _matLampGlow.opacity = nightFactor * 0.18;
 
   const dom = (t < 0.5 ? a : b).name;
   if (dom !== biomeShown) showBiome(dom);
@@ -1027,7 +1068,7 @@ function render() {
   reconcile(trafficGroup, traffic, (o) => buildProceduralCar(o.color), placeOnRoad);
   reconcile(sceneryGroup, scenery, makeScenery, (o) => {
     placeOnRoad(o);
-    o.mesh.rotation.y = o.lx < 0 ? 0.3 : -0.3;
+    o.mesh.rotation.y = o.type === "lamp" ? 0 : (o.lx < 0 ? 0.3 : -0.3);
   });
 
   if (playerMesh) {
@@ -1137,6 +1178,7 @@ function resetRunState() {
   state.playerVX = 0;
   state.lastSpawnPos = 0;
   state.nextSceneryZ = 0;
+  state.nextLampZ = 0;
   state.flash = state.hitFlash = state.shake = 0;
   state.combo = 0; state.comboTimer = 0; state.mult = 1;
   state.maxCombo = 0; state.passed = 0; state.topSpeed = 0;
