@@ -1,0 +1,13 @@
+{
+  "name": "traffic-racer-3d",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Arcade lane-weaving traffic racer built with Three.js, with a distance-driven Day/Night biome engine.",
+  "type": "module",
+  "scripts": {
+    "start": "npx --yes serve -l 8000 .",
+    "serve": "python3 -m http.server 8000"
+  },
+  "keywords": ["game", "threejs", "webgl", "racer"],
+  "license": "MIT"
+}
