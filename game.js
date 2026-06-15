@@ -47,10 +47,10 @@ const TRAFFIC_MIN_FACTOR = 0.5; // slowest traffic is half top speed (nobody par
 const TRAFFIC_GAP = 700; // min world gap between cars in a lane (they queue, not overlap)
 
 // ---- Traffic modes ----
-// One-way: all four lanes flow your direction (the classic game).
+// One-way: five evenly-spaced lanes (incl. the center) all flow your direction.
 // Two-way: the carriageway splits down the middle — you drive the right lanes,
 // the left lanes carry oncoming traffic. Dipping left for a near miss pays big.
-const ALL_LANES = [-0.8, -0.4, 0.4, 0.8]; // sorted left -> right
+const ONEWAY_LANES = [-0.8, -0.4, 0, 0.4, 0.8]; // sorted left -> right, center filled
 const FWD_LANES = [0.4, 0.8];    // two-way: your direction (right side)
 const ONC_LANES = [-0.4, -0.8];  // two-way: oncoming (left side)
 const ONCOMING_BONUS = 1.8;      // near-miss score multiplier vs oncoming traffic
@@ -464,6 +464,7 @@ window.addEventListener("keydown", (e) => {
     case "ArrowUp": case "w": case "W": keys.up = true; break;
     case "ArrowDown": case "s": case "S": keys.down = true; break;
     case "m": case "M": toggleMute(); break;
+    case "Escape": if (state.running) quitRun(); break; // stop driving -> results
   }
 });
 window.addEventListener("keyup", (e) => {
@@ -538,11 +539,11 @@ function pickKind(dir) {
   return r < 0.15 ? "truck" : r < 0.26 ? "bus" : "car";
 }
 // Lanes flowing your way: all four in one-way mode, the right pair in two-way.
-function fwdLanes() { return trafficMode === "oneway" ? ALL_LANES : FWD_LANES; }
+function fwdLanes() { return trafficMode === "oneway" ? ONEWAY_LANES : FWD_LANES; }
 // The set of lanes a vehicle can weave within (its own carriageway).
 function laneGroupOf(car) {
   if (car.dir < 0) return ONC_LANES;
-  return trafficMode === "oneway" ? ALL_LANES : FWD_LANES;
+  return trafficMode === "oneway" ? ONEWAY_LANES : FWD_LANES;
 }
 // A random lane immediately adjacent to `lane` within its group (or itself).
 function adjacentLane(lane, group) {
@@ -1420,13 +1421,21 @@ function startGame() {
   loop();
 }
 
-function gameOver() {
+function gameOver() { endRun(true); }   // crashed into traffic
+function quitRun() { endRun(false); }   // chose to stop (Esc)
+
+// End the current run: bank credits, record the high score, show results. A
+// crash adds the impact SFX + shake and a beat before the card; a voluntary
+// stop skips straight to it.
+function endRun(crashed) {
   if (!state.running) return;
   state.running = false;
   if (audio) audio.engineGain.gain.setTargetAtTime(0, audio.ac.currentTime, 0.1);
-  audioCrash();
-  state.shake = 1.6;
-  render(); // one shaken, frozen frame for impact
+  if (crashed) {
+    audioCrash();
+    state.shake = 1.6;
+    render(); // one shaken, frozen frame for impact
+  }
 
   // Score is the bragging number; credits earned are a fraction of it.
   lastEarned = Math.round(state.score * CREDIT_RATE);
@@ -1435,7 +1444,7 @@ function gameOver() {
   if (isHi) highScore = state.score;
   saveProgress();
 
-  setTimeout(() => showResults(isHi), 550); // a beat before the results card
+  setTimeout(() => showResults(isHi), crashed ? 550 : 120);
 }
 
 const RANKS = [
@@ -1562,7 +1571,7 @@ function showMenu() {
         <button id="garage-btn" class="alt">Garage</button>
         <button id="settings-btn" class="alt">Settings</button>
       </div>
-      <p class="controls">↑/W gas · ↓/S brake · ←→/AD steer · M mute</p>
+      <p class="controls">↑/W gas · ↓/S brake · ←→/AD steer · M mute · Esc stop</p>
     </div>
   `;
   overlay.classList.remove("hidden");
