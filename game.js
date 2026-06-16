@@ -491,7 +491,7 @@ window.addEventListener("keydown", (e) => {
     case "ArrowDown": case "s": case "S": keys.down = true; break;
     case "m": case "M": toggleMute(); break;
     case "f": case "F": toggleFps(); break; // perf overlay (fps / frame time / draw calls)
-    case "Escape": if (state.running) quitRun(); break; // stop driving -> home
+    case "p": case "P": case "Escape": togglePause(); break; // pause / resume (Quit to Home lives in the menu)
   }
 });
 window.addEventListener("keyup", (e) => {
@@ -1413,9 +1413,17 @@ const FIXED_DT = 1000 / 60;   // ms per simulation step
 const MAX_STEPS = 5;          // clamp catch-up after a stall (no spiral of death)
 let _loopPrev = 0, _accum = 0;
 let _loopRunning = false; // guards against stacking parallel rAF chains on restart
+let paused = false;       // run is frozen but still on screen behind the pause menu
 function loop(now) {
   if (!state.running) { _loopRunning = false; return; }
   if (!_loopPrev) _loopPrev = now;
+  if (paused) {           // freeze physics; keep drawing the frozen frame + meter
+    _loopPrev = now;      // swallow paused time so resume doesn't burst catch-up
+    render();
+    fpsMeter();
+    requestAnimationFrame(loop);
+    return;
+  }
   _accum += now - _loopPrev;
   _loopPrev = now;
   if (_accum > FIXED_DT * MAX_STEPS) _accum = FIXED_DT * MAX_STEPS; // drop backlog
@@ -1435,6 +1443,35 @@ function loop(now) {
   if (state.running) render();
   fpsMeter();
   requestAnimationFrame(loop);
+}
+
+// ---- Pause ----
+function togglePause() { if (state.running) setPaused(!paused); }
+function setPaused(p) {
+  if (paused === p || !state.running) return;
+  paused = p;
+  document.getElementById("pause").classList.toggle("hidden", !p);
+  if (p) {
+    if (audio) audio.engineGain.gain.setTargetAtTime(0.0001, audio.ac.currentTime, 0.08); // hush the engine
+    buildPauseMenu();
+  } else {
+    _loopPrev = 0; // fresh clock on resume (audioEngine restores the engine sound)
+  }
+}
+function buildPauseMenu() {
+  const el = document.getElementById("pause");
+  el.innerHTML = `
+    <div class="pause-card">
+      <h1 class="pause-title">PAUSED</h1>
+      <div class="pause-btns">
+        <button id="p-resume">Resume</button>
+        <button id="p-restart" class="alt">Restart</button>
+        <button id="p-home" class="alt">Quit to Home</button>
+      </div>
+    </div>`;
+  document.getElementById("p-resume").addEventListener("click", () => setPaused(false));
+  document.getElementById("p-restart").addEventListener("click", () => { setPaused(false); startGame(); });
+  document.getElementById("p-home").addEventListener("click", () => { setPaused(false); quitRun(); });
 }
 
 // ---- Perf meter (toggle with F) ----
@@ -1529,10 +1566,12 @@ function startGame() {
   setEngineProfile(activeCar);
   setPlayerCar(activeCar);
   resetRunState();
+  paused = false;
   state.running = true;
   document.body.classList.add("playing");
   document.getElementById("overlay").classList.add("hidden");
   document.getElementById("results").classList.add("hidden");
+  document.getElementById("pause").classList.add("hidden");
   updateHUD();
   _loopPrev = 0; _accum = 0;   // fresh clock so the first frame doesn't burst catch-up
   if (!_loopRunning) { _loopRunning = true; requestAnimationFrame(loop); } // never stack chains
@@ -2022,6 +2061,7 @@ function handleCarClick(id) {
 }
 
 document.getElementById("mute").addEventListener("click", toggleMute);
+document.getElementById("pause-btn").addEventListener("click", togglePause);
 loadProgress();
 initThree();
 showMenu();

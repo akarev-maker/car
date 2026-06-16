@@ -492,6 +492,56 @@ button:disabled {
   background: rgba(255, 255, 255, 0.24);
 }
 
+#pause-btn {
+  position: absolute;
+  bottom: 14px;
+  left: 70px;
+  margin: 0;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 46px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  z-index: 6;
+  display: none; /* only while a run is active */
+  -webkit-tap-highlight-color: transparent;
+}
+body.playing #pause-btn { display: block; }
+#pause-btn:hover { background: rgba(255, 255, 255, 0.24); }
+
+/* ---- Pause overlay ---- */
+#pause {
+  background: rgba(8, 10, 18, 0.78);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+}
+.pause-card {
+  width: 100%;
+  max-width: 340px;
+  text-align: center;
+  padding: 26px 22px 20px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55);
+}
+#pause .pause-title {
+  margin: 0 0 18px;
+  font-size: 26px;
+  letter-spacing: 2px;
+  color: #ffd166;
+}
+.pause-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pause-btns button { margin: 0; width: 100%; }
+
 /* ---- Mobile joystick ---- */
 .joystick {
   position: absolute;
