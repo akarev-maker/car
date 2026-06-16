@@ -48,6 +48,17 @@ const TRAFFIC_MAX_SPEED = 30; // absolute traffic speed (so better cars overtake
 const TRAFFIC_MIN_FACTOR = 0.5; // slowest traffic is half top speed (nobody parks on the highway)
 const TRAFFIC_GAP = 700; // min world gap between cars in a lane (they queue, not overlap)
 
+// ---- Traffic density ----
+// How busy the road is, picked in Settings. `gap` scales the distance between
+// spawn waves (higher = sparser); `onc` scales the oncoming / extra-car odds;
+// `sight` scales how far you see + how far ahead cars appear — a quieter road
+// earns a longer sightline (more reaction time), a busy one stays standard.
+const TRAFFIC_DENSITY = {
+  low:    { label: "Low",    gap: 1.9,  onc: 0.55, sight: 1.4 },
+  medium: { label: "Medium", gap: 1.0,  onc: 1.0,  sight: 1.0 },
+  high:   { label: "High",   gap: 0.58, onc: 1.4,  sight: 1.0 },
+};
+
 // ---- Traffic modes ----
 // One-way: five evenly-spaced lanes (incl. the center) all flow your direction.
 // Two-way: the carriageway splits down the middle — you drive the right lanes,
@@ -140,6 +151,9 @@ let selectedCar = "hatch";
 let ownedEnvs = ["plains"];  // unlocked driving environments (Plains is free)
 let selectedEnv = "plains";  // the environment the next run takes place in
 let trafficMode = "twoway"; // "oneway" (all lanes your way) | "twoway" (oncoming half)
+let trafficDensity = "medium"; // "low" | "medium" | "high" — see TRAFFIC_DENSITY
+const densityCfg = () => TRAFFIC_DENSITY[trafficDensity] || TRAFFIC_DENSITY.medium;
+const spawnAhead = () => SPAWN_DZ * densityCfg().sight; // live spawn distance / sightline
 let speedUnit = "kmh";      // "kmh" | "mph" — display only; internal units unchanged
 let quality = "high";       // "high" | "low" — Low caps the render resolution for slow GPUs
 const QUALITY_DPR = { high: 1.5, low: 1.0 }; // pixel-ratio cap per quality (fill-rate lever)
@@ -163,6 +177,7 @@ function loadProgress() {
     ownedEnvs = JSON.parse(localStorage.getItem("tr_envs")) || ["plains"];
     selectedEnv = localStorage.getItem("tr_env") || "plains";
     trafficMode = localStorage.getItem("tr_mode") === "oneway" ? "oneway" : "twoway";
+    trafficDensity = TRAFFIC_DENSITY[localStorage.getItem("tr_density")] ? localStorage.getItem("tr_density") : "medium";
     speedUnit = localStorage.getItem("tr_unit") === "mph" ? "mph" : "kmh";
     quality = localStorage.getItem("tr_quality") === "low" ? "low" : "high";
     muted = localStorage.getItem("tr_muted") === "1";
@@ -193,6 +208,7 @@ function saveProgress() {
     localStorage.setItem("tr_envs", JSON.stringify(ownedEnvs));
     localStorage.setItem("tr_env", selectedEnv);
     localStorage.setItem("tr_mode", trafficMode);
+    localStorage.setItem("tr_density", trafficDensity);
     localStorage.setItem("tr_unit", speedUnit);
     localStorage.setItem("tr_quality", quality);
     localStorage.setItem("tr_muted", muted ? "1" : "0");
@@ -764,7 +780,7 @@ function adjacentLane(lane, group) {
 }
 
 function spawnVehicle(lane, dir) {
-  const z = state.position + SPAWN_DZ;
+  const z = state.position + spawnAhead();
   // Don't drop a vehicle on top of one already heading the same way in this lane.
   for (const c of traffic) {
     if (c.lane === lane && c.dir === dir && Math.abs(c.z - z) < TRAFFIC_GAP * 1.6) return;
@@ -776,7 +792,7 @@ function spawnVehicle(lane, dir) {
   traffic.push({
     lane, lx: lane, z, dir, kind,
     halfW: v.halfW,
-    prevDz: SPAWN_DZ,
+    prevDz: spawnAhead(),
     speed: base * v.speedF,
     color: TRAFFIC_COLORS[Math.floor(Math.random() * TRAFFIC_COLORS.length)],
     changeCD: 90 + Math.floor(Math.random() * 180), // frames until it may weave
@@ -788,12 +804,13 @@ function spawnVehicle(lane, dir) {
 
 function spawnWave() {
   const fl = fwdLanes();
+  const onc = densityCfg().onc; // extra-car / oncoming odds scale with density
   if (trafficMode === "oneway") {
     // Classic: 1–3 cars across the four lanes, always leaving a gap to thread.
     const lanes = [...fl];
     let count = 1;
-    if (Math.random() < Math.min(0.6, state.position / 40000)) count++;
-    if (Math.random() < Math.min(0.35, state.position / 80000)) count++;
+    if (Math.random() < Math.min(0.6, state.position / 40000) * onc) count++;
+    if (Math.random() < Math.min(0.35, state.position / 80000) * onc) count++;
     count = Math.min(count, fl.length - 2);
     for (let n = 0; n < count; n++)
       spawnVehicle(lanes.splice(Math.floor(Math.random() * lanes.length), 1)[0], 1);
@@ -802,7 +819,7 @@ function spawnWave() {
   // Two-way: one forward vehicle (so a forward lane is always threadable), plus
   // a chance of oncoming whose density ramps with distance.
   spawnVehicle(fl[Math.floor(Math.random() * fl.length)], 1);
-  const oncChance = Math.min(0.75, 0.25 + state.position / 50000);
+  const oncChance = Math.min(0.85, (0.25 + state.position / 50000) * onc);
   if (Math.random() < oncChance)
     spawnVehicle(ONC_LANES[Math.floor(Math.random() * ONC_LANES.length)], -1);
 }
@@ -942,7 +959,7 @@ function spawnScenery(z) {
 
 // Keep the roadside populated ahead of the player; recycle what's passed.
 function updateScenery() {
-  while (state.nextSceneryZ < state.position + SPAWN_DZ + 1500) {
+  while (state.nextSceneryZ < state.position + spawnAhead() + 1500) {
     spawnScenery(state.nextSceneryZ);
     state.nextSceneryZ += SCENERY_STEP * (0.6 + Math.random() * 0.8);
   }
@@ -988,8 +1005,8 @@ function update() {
   if (state.playerX < -PLAYER_X_LIMIT) { state.playerX = -PLAYER_X_LIMIT; state.playerVX = 0; }
   if (state.playerX > PLAYER_X_LIMIT) { state.playerX = PLAYER_X_LIMIT; state.playerVX = 0; }
 
-  // Spawn traffic by distance (denser over time)
-  const spawnGap = Math.max(1500, 3000 - state.position / 30);
+  // Spawn traffic by distance (denser over time), scaled by chosen density.
+  const spawnGap = Math.max(1500, 3000 - state.position / 30) * densityCfg().gap;
   if (state.position - state.lastSpawnPos > spawnGap) {
     state.lastSpawnPos = state.position;
     spawnWave();
@@ -1054,7 +1071,7 @@ function update() {
     }
     car.prevDz = dz;
 
-    if (dz < -300 || dz > SPAWN_DZ + 4000) traffic.splice(i, 1);
+    if (dz < -300 || dz > spawnAhead() + 4000) traffic.splice(i, 1);
   }
 
   for (let i = popups.length - 1; i >= 0; i--) {
@@ -1728,7 +1745,7 @@ function applyBiome(km) {
   scene.background = _biomeSky;        // background tracks the live sky color
   scene.fog.color.copy(_biomeSky);     // Fog keeps its own Color, so copy into it
   scene.fog.near = mix(a.fogNear, b.fogNear);
-  scene.fog.far  = mix(a.fogFar,  b.fogFar);
+  scene.fog.far  = mix(a.fogFar,  b.fogFar) * densityCfg().sight; // quieter road sees further
 
   hemiLight.color.set(a.hemiSky).lerp(_biomeTmp.set(b.hemiSky), t);
   hemiLight.groundColor.set(a.hemiGround).lerp(_biomeTmp.set(b.hemiGround), t);
@@ -2195,6 +2212,12 @@ function setTrafficMode(m) {
   applyRoadMode(); // swap the road texture (centerline) to match
 }
 
+function setTrafficDensity(d) {
+  if (d === trafficDensity || !TRAFFIC_DENSITY[d]) return;
+  trafficDensity = d;        // takes effect live (spawn rate + sightline read it each frame)
+  saveProgress();
+}
+
 // Effective pixel-ratio cap for the current quality (never above the device's).
 function qualityCap() {
   return Math.min(window.devicePixelRatio || 1, QUALITY_DPR[quality]);
@@ -2213,11 +2236,16 @@ function showSettings() {
   const seg = (id, on, off, onSel) =>
     `<div class="mode-toggle"><button id="${id}-a" class="mode-opt ${onSel ? "on" : ""}">${on}</button>` +
     `<button id="${id}-b" class="mode-opt ${onSel ? "" : "on"}">${off}</button></div>`;
+  // Segmented control with N options; each button id is `${id}-${value}`.
+  const segN = (id, opts, cur) =>
+    `<div class="mode-toggle">${opts.map(([val, label]) =>
+      `<button id="${id}-${val}" class="mode-opt ${val === cur ? "on" : ""}">${label}</button>`).join("")}</div>`;
   overlay.innerHTML = `
     <div class="settings-panel">
       <h2>Settings</h2>
       <div class="set-row"><span class="set-label">Speed units</span>${seg("set-unit", "km/h", "mph", speedUnit === "kmh")}</div>
       <div class="set-row"><span class="set-label">Traffic</span>${seg("set-mode", "Two-way", "One-way", trafficMode === "twoway")}</div>
+      <div class="set-row"><span class="set-label">Traffic density</span>${segN("set-dens", [["low", "Low"], ["medium", "Med"], ["high", "High"]], trafficDensity)}</div>
       <div class="set-row"><span class="set-label">Graphics</span>${seg("set-q", "High", "Low", quality === "high")}</div>
       <div class="set-row"><span class="set-label">Sound</span>${seg("set-snd", "On", "Off", !muted)}</div>
       <button id="settings-back">Back</button>
@@ -2230,6 +2258,8 @@ function showSettings() {
   document.getElementById("set-unit-b").addEventListener("click", () => { speedUnit = "mph"; reopen(); });
   document.getElementById("set-mode-a").addEventListener("click", () => { setTrafficMode("twoway"); showSettings(); });
   document.getElementById("set-mode-b").addEventListener("click", () => { setTrafficMode("oneway"); showSettings(); });
+  for (const d of ["low", "medium", "high"])
+    document.getElementById(`set-dens-${d}`).addEventListener("click", () => { setTrafficDensity(d); showSettings(); });
   document.getElementById("set-q-a").addEventListener("click", () => { setQuality("high"); showSettings(); });
   document.getElementById("set-q-b").addEventListener("click", () => { setQuality("low"); showSettings(); });
   document.getElementById("set-snd-a").addEventListener("click", () => { if (muted) toggleMute(); reopen(); });
