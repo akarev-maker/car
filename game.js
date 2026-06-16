@@ -286,27 +286,19 @@ function ensureGoals() {
 }
 const allGoalItems = () => { ensureGoals(); return [...goals.items, ...weekly.items]; };
 
-// Live snapshot of where the current run sits against a goal (committed progress
-// from earlier runs + this run so far). "sum" goals add the run; "max" goals take
-// whichever is bigger. earned is projected from the score at the current rate.
-function goalLiveValue(it, t) {
-  const runVal = t.stat({
-    distKm: state.position / DIST_DIV,
-    score: state.score,
-    passed: state.passed,
-    maxCombo: state.maxCombo,
-    earned: Math.round(state.score * CREDIT_RATE),
-  }) || 0;
+// Where a goal sits given a run-stats snapshot `r` (committed progress from
+// earlier runs + this run so far). "sum" goals add the run; "max" goals take
+// whichever is bigger.
+function goalLiveValue(it, t, r) {
+  const runVal = t.stat(r) || 0;
   return t.mode === "sum" ? it.progress + runVal : Math.max(it.progress, runVal);
 }
-
-// During a run, fire a toast + reward the instant a goal is met. endRun's
-// trackGoals skips done goals, so nothing is credited or committed twice.
-function checkGoalsLive() {
-  for (const it of allGoalItems()) {
+function _liveCheckSet(set, r) {
+  if (!set) return;
+  for (const it of set.items) {
     if (it.done) continue;
     const t = goalTmpl(it.id);
-    if (t && goalLiveValue(it, t) >= it.target) {
+    if (t && goalLiveValue(it, t, r) >= it.target) {
       it.done = true;
       it.progress = it.target;
       bank += it.reward;
@@ -314,6 +306,22 @@ function checkGoalsLive() {
       goalToast(it);
     }
   }
+}
+
+// During a run, fire a toast + reward the instant a goal is met. endRun's
+// trackGoals skips done goals, so nothing is credited or committed twice. Runs
+// every physics step, so it builds the stats snapshot once (no per-goal allocs)
+// and reads the already-ensured sets directly.
+function checkGoalsLive() {
+  const r = {
+    distKm: state.position / DIST_DIV,
+    score: state.score,
+    passed: state.passed,
+    maxCombo: state.maxCombo,
+    earned: Math.round(state.score * CREDIT_RATE),
+  };
+  _liveCheckSet(goals, r);
+  _liveCheckSet(weekly, r);
 }
 
 // Roll a finished run's stats into the goals; returns the goals just completed.
@@ -1520,7 +1528,7 @@ function render() {
   drawFx(sf);
 }
 
-// 2D overlay: hit flash, speed streaks, near-miss flash, score popups.
+// 2D overlay: hit flash, near-miss flash, score popups.
 function drawFx(sf = 0) {
   fxCtx.clearRect(0, 0, fx.width, fx.height);
 
@@ -1546,9 +1554,10 @@ function drawFx(sf = 0) {
 }
 
 // Freeze the game while a mobile player holds the device in portrait.
+// matchMedia list is created once (it's live), not per physics step.
+const _portraitMQ = window.matchMedia("(orientation: portrait)");
 function isBlocked() {
-  return document.body.classList.contains("touch") &&
-    window.matchMedia("(orientation: portrait)").matches;
+  return document.body.classList.contains("touch") && _portraitMQ.matches;
 }
 
 // ---- Loop ----
@@ -1564,11 +1573,9 @@ let paused = false;       // run is frozen but still on screen behind the pause 
 function loop(now) {
   if (!state.running) { _loopRunning = false; return; }
   if (!_loopPrev) _loopPrev = now;
-  if (paused) {           // freeze physics; keep drawing the frozen frame + meter
-    _loopPrev = now;      // swallow paused time so resume doesn't burst catch-up
-    render();
-    fpsMeter();
-    requestAnimationFrame(loop);
+  if (paused) {           // frozen: the last frame stays on the canvas behind the
+    _loopPrev = now;      // overlay, so don't burn GPU re-rendering it. Swallow the
+    requestAnimationFrame(loop); // elapsed time so resume doesn't burst catch-up.
     return;
   }
   _accum += now - _loopPrev;
@@ -1795,7 +1802,6 @@ function showResults(isHi) {
   rollNumber(document.getElementById("earn-num"), lastEarned, 900);
   audioCoin();
   if (isHi) celebrateBest();
-  pendingEarn = 0; // results already showed the earnings
   document.getElementById("retry-btn").addEventListener("click", startGame);
   document.getElementById("r-garage").addEventListener("click", () => { el.classList.add("hidden"); showMenu(); openGarage(); });
   document.getElementById("r-home").addEventListener("click", () => { el.classList.add("hidden"); showMenu(); });
@@ -1811,9 +1817,8 @@ function celebrateBest() {
 }
 
 // ---- Currency (Credits) + UI helpers ----
-let pendingEarn = 0; // credits earned on the last run, animated into the wallet
 let lastEarned = 0;  // credits granted by the most recent run (shown on results)
-let goalsJustDone = []; // daily goals completed by the most recent run (shown on results)
+let goalsJustDone = []; // daily/weekly goals completed by the most recent run (shown on results)
 const CRED_ICO = '<svg class="cred-ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#cred-coin"/></svg>';
 const fmt = (n) => Math.round(n).toLocaleString();
 const credCost = (n) => `<span class="cred">${CRED_ICO}<span class="cred-num">${fmt(n)}</span></span>`;
