@@ -13,7 +13,7 @@ const canvas = document.getElementById("game");
 // 4 lanes across the carriageway (±1 = road edges); split into your direction
 // and oncoming further down (see FWD_LANES / ONC_LANES).
 const START_LANE = 0.25; // you begin in an inner lane, clear of oncoming traffic
-const SPAWN_DZ = 4800;   // how far ahead (game-z units) traffic appears
+const SPAWN_DZ = 6000;   // how far ahead (game-z units) traffic appears (deep enough to fade in behind the fog)
 const ROAD_HALF_W = 9;   // world half-width of the asphalt (lx = ±1)
 const ROAD_LEN = 660;    // world length of the road / ground meshes
 const Z_SCALE = 0.055;   // world units per game-z unit (depth compression)
@@ -406,11 +406,11 @@ const CREDIT_RATE = 0.125;  // credits earned = score x this (score stays the br
 const BIOME_CYCLE_KM = 10;    // distance for one full day->night->day lap (slow)
 const BIOMES = [
   { name: "Day",
-    sky: 0x86c8e8, fogNear: 70, fogFar: 300,
+    sky: 0x86c8e8, fogNear: 70, fogFar: 380,
     hemiSky: 0xbfe3ff, hemiGround: 0x4a6b3a, hemiInt: 1.0,
     sunColor: 0xfff1da, sunInt: 1.0, grass: 0x2f9e44, night: 0 },
   { name: "Night",
-    sky: 0x050811, fogNear: 48, fogFar: 220,
+    sky: 0x050811, fogNear: 48, fogFar: 290,
     hemiSky: 0x2b3a64, hemiGround: 0x06080f, hemiInt: 0.6,
     sunColor: 0xaec2ff, sunInt: 0.85, grass: 0x10331e, night: 1 },
 ];
