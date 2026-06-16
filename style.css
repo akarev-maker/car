@@ -551,38 +551,58 @@ body.playing #pause-btn { display: block; }
 }
 .pause-btns button { margin: 0; width: 100%; }
 
-/* ---- Mobile joystick ---- */
-.joystick {
+/* ---- Mobile touch controls ---- */
+#touch-controls { display: none; }
+body.touch.playing #touch-controls { display: block; }
+.tc-left, .tc-right {
   position: absolute;
-  bottom: 22px;
-  right: 26px;
-  width: 130px;
-  height: 130px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
-  border: 2px solid rgba(255, 255, 255, 0.25);
-  display: none; /* shown only on touch devices */
-  touch-action: none;
-  -webkit-tap-highlight-color: transparent;
+  bottom: 16px;
+  display: flex;
+  gap: 12px;
   z-index: 5;
 }
-
-.stick {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 64px;
-  height: 64px;
-  margin: -32px 0 0 -32px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.45);
-  border: 2px solid rgba(255, 255, 255, 0.7);
-  transition: transform 0.04s linear;
+.tc-left { left: 16px; }
+.tc-right { right: 16px; }
+.tc-btn {
+  margin: 0;
+  padding: 0;
+  width: 74px;
+  height: 74px;
+  border-radius: 18px;
+  font-size: 26px;
+  font-weight: 800;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
-
-body.touch .joystick {
-  display: block;
+.tc-btn:active { background: rgba(255, 255, 255, 0.32); }
+.tc-gas {
+  width: 92px;
+  font-size: 16px;
+  letter-spacing: 1px;
+  background: rgba(6, 214, 160, 0.28);
+  border-color: rgba(6, 214, 160, 0.6);
 }
+.tc-gas:active { background: rgba(6, 214, 160, 0.5); }
+.tc-brake {
+  font-size: 13px;
+  letter-spacing: 1px;
+  background: rgba(255, 107, 107, 0.24);
+  border-color: rgba(255, 107, 107, 0.55);
+}
+.tc-brake:active { background: rgba(255, 107, 107, 0.45); }
+
+/* During touch play, tuck the corner utility buttons to bottom-center so they
+   don't sit under the steering pad. */
+body.touch.playing #pause-btn { left: 50%; right: auto; bottom: 16px; transform: translateX(-52px); }
+body.touch.playing #mute { left: 50%; bottom: 16px; transform: translateX(6px); }
 
 /* ---- Rotate-to-landscape prompt (mobile portrait only) ---- */
 #rotate {
@@ -824,6 +844,16 @@ body.touch .joystick {
 }
 #overlay .home-car { font-size: 15px; opacity: 0.92; margin: 0; }
 #overlay .home-car b { font-weight: 800; }
+
+/* Short landscape screens (phones, esp. with Chrome's address bar): compact the
+   menu and cap the goals list so the Start button stays on screen. */
+@media (max-height: 500px) {
+  .overlay { padding: 10px; }
+  #overlay .home-logo { font-size: 26px; margin-bottom: 4px; }
+  #overlay .home-stats { font-size: 12px; }
+  #overlay .goals { max-height: 34vh; overflow-y: auto; margin-top: 8px; padding: 8px 12px; }
+  #overlay .home-bottom { gap: 2px; }
+}
 
 /* ---- Daily goals (home screen) ---- */
 #overlay .goals {

@@ -679,59 +679,31 @@ window.addEventListener("keyup", (e) => {
   }
 });
 
-// ---- Joystick (mobile) ----
+// ---- Touch controls (mobile) ----
+// Hold buttons that emulate the arrow keys: ◀ ▶ steer, GAS accelerates, BRAKE
+// brakes. Separate elements mean multitouch (steer + gas at once) just works,
+// and touch events stay with their start element so sliding a finger off still
+// releases cleanly.
 if (window.matchMedia("(pointer: coarse)").matches || "ontouchstart" in window) {
   document.body.classList.add("touch");
 }
-const joystick = document.getElementById("joystick");
-const stick = document.getElementById("stick");
-const JOY_R = 44;
-let joyActive = false;
-let joyId = null;
-let joyCenter = { x: 0, y: 0 };
-
-function joyStart(x, y) {
-  const rect = joystick.getBoundingClientRect();
-  joyCenter = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-  joyActive = true;
-  joyMove(x, y);
+function holdButton(id, key) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const set = (v) => { keys[key] = v; };
+  const press = (e) => { e.preventDefault(); set(true); };
+  const release = (e) => { if (e.cancelable) e.preventDefault(); set(false); };
+  el.addEventListener("touchstart", press, { passive: false });
+  el.addEventListener("touchend", release);
+  el.addEventListener("touchcancel", release);
+  el.addEventListener("mousedown", press);
+  el.addEventListener("mouseup", release);
+  el.addEventListener("mouseleave", () => set(false));
 }
-function joyMove(x, y) {
-  if (!joyActive) return;
-  let dx = x - joyCenter.x;
-  let dy = y - joyCenter.y;
-  const dist = Math.hypot(dx, dy);
-  if (dist > JOY_R) { dx *= JOY_R / dist; dy *= JOY_R / dist; }
-  stick.style.transform = `translate(${dx}px, ${dy}px)`;
-  input.steer = clamp(dx / JOY_R, -1, 1);
-  input.throttle = clamp(-dy / JOY_R, 0, 1);
-  input.brake = clamp(dy / JOY_R, 0, 1);
-}
-function joyEnd() {
-  joyActive = false;
-  stick.style.transform = "translate(0, 0)";
-  input.steer = input.throttle = input.brake = 0;
-}
-joystick.addEventListener("touchstart", (e) => {
-  e.preventDefault();
-  const t = e.changedTouches[0];
-  joyId = t.identifier;
-  joyStart(t.clientX, t.clientY);
-}, { passive: false });
-window.addEventListener("touchmove", (e) => {
-  if (!joyActive) return;
-  for (const t of e.changedTouches) {
-    if (t.identifier === joyId) { e.preventDefault(); joyMove(t.clientX, t.clientY); }
-  }
-}, { passive: false });
-window.addEventListener("touchend", (e) => {
-  for (const t of e.changedTouches) {
-    if (t.identifier === joyId) { joyEnd(); joyId = null; }
-  }
-});
-joystick.addEventListener("mousedown", (e) => { e.preventDefault(); joyStart(e.clientX, e.clientY); });
-window.addEventListener("mousemove", (e) => { if (joyActive) joyMove(e.clientX, e.clientY); });
-window.addEventListener("mouseup", () => { if (joyActive) joyEnd(); });
+holdButton("btn-left", "left");
+holdButton("btn-right", "right");
+holdButton("btn-gas", "up");
+holdButton("btn-brake", "down");
 
 // ---- Traffic ----
 // Mostly cars, with the occasional heavy. Oncoming keeps fewer heavies so the
@@ -913,11 +885,9 @@ function worldToScreen(x, y, z) {
 
 // ---- Update ----
 function update() {
-  if (!joyActive) {
-    input.steer = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
-    input.throttle = keys.up ? 1 : 0;
-    input.brake = keys.down ? 1 : 0;
-  }
+  input.steer = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+  input.throttle = keys.up ? 1 : 0;
+  input.brake = keys.down ? 1 : 0;
 
   // Top speed comes from your car, with a small bonus the farther you get.
   state.maxSpeed = activeStats.maxSpeed + Math.min(18, Math.floor(state.position / 10000) * 6);
