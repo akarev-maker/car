@@ -27,7 +27,7 @@ const TRAFFIC_COLORS = ["#ef476f", "#06d6a0", "#118ab2", "#ffd166", "#9b5de5", "
 
 // ---- Roadside scenery ----
 const SIGN_COLORS = ["#2e7d32", "#1565c0", "#f9a825"]; // highway / info / warning
-const SCENERY_STEP = 150; // average spacing between roadside objects (world units)
+const SCENERY_STEP = 280; // average spacing between roadside objects (world units)
 
 // ---- Driving feel ----
 const ACCEL = 1.3;
