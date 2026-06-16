@@ -137,6 +137,8 @@ function effStats(c) {
 let bank = 0;
 let owned = ["hatch"];
 let selectedCar = "hatch";
+let ownedEnvs = ["plains"];  // unlocked driving environments (Plains is free)
+let selectedEnv = "plains";  // the environment the next run takes place in
 let trafficMode = "twoway"; // "oneway" (all lanes your way) | "twoway" (oncoming half)
 let speedUnit = "kmh";      // "kmh" | "mph" — display only; internal units unchanged
 let quality = "high";       // "high" | "low" — Low caps the render resolution for slow GPUs
@@ -158,6 +160,8 @@ function loadProgress() {
     bank = parseInt(localStorage.getItem("tr_bank")) || 0;
     owned = JSON.parse(localStorage.getItem("tr_owned")) || ["hatch"];
     selectedCar = localStorage.getItem("tr_selected") || "hatch";
+    ownedEnvs = JSON.parse(localStorage.getItem("tr_envs")) || ["plains"];
+    selectedEnv = localStorage.getItem("tr_env") || "plains";
     trafficMode = localStorage.getItem("tr_mode") === "oneway" ? "oneway" : "twoway";
     speedUnit = localStorage.getItem("tr_unit") === "mph" ? "mph" : "kmh";
     quality = localStorage.getItem("tr_quality") === "low" ? "low" : "high";
@@ -170,6 +174,9 @@ function loadProgress() {
   ensureGoals(); // (re)generate today's / this week's sets if missing or stale
   if (!owned.includes("hatch")) owned.push("hatch");
   if (!owned.includes(selectedCar)) selectedCar = "hatch";
+  ownedEnvs = ownedEnvs.filter((id) => ENVIRONMENTS.some((e) => e.id === id));
+  if (!ownedEnvs.includes("plains")) ownedEnvs.push("plains");
+  if (!ownedEnvs.includes(selectedEnv)) selectedEnv = "plains";
   // Backfill any missing cars/tracks and clamp saved levels.
   const def = defaultUpgrades();
   for (const id in def) {
@@ -183,6 +190,8 @@ function saveProgress() {
     localStorage.setItem("tr_bank", bank);
     localStorage.setItem("tr_owned", JSON.stringify(owned));
     localStorage.setItem("tr_selected", selectedCar);
+    localStorage.setItem("tr_envs", JSON.stringify(ownedEnvs));
+    localStorage.setItem("tr_env", selectedEnv);
     localStorage.setItem("tr_mode", trafficMode);
     localStorage.setItem("tr_unit", speedUnit);
     localStorage.setItem("tr_quality", quality);
@@ -399,37 +408,35 @@ const comboMult = (combo) => Math.min(8, 1 + Math.floor(combo / 2)); // x1..x8
 const DIST_DIV = 16000;     // game-units per displayed "km"
 const CREDIT_RATE = 0.125;  // credits earned = score x this (score stays the bragging number)
 
-// ---- Biome engine -------------------------------------------------------
-// The world cycles through an ORDERED RING of regions as you drive. Each entry
-// is a full environment param set; every frame the engine holds steady inside
-// the current region, then smoothly blends into the next one (see ringSample).
-// The ring is also arranged as a day->night->dawn arc, so the time of day rides
-// along with the change of scenery. `scape` names the roadside prop palette
-// (see spawnScenery); `night` (0..1) drives headlights, window + lamp glow.
-//   grass = the ground-plane colour, so it doubles as sand / concrete / etc.
-const BIOME_CYCLE_KM = 20;    // distance for one full lap through every region (slow)
-const BIOMES = [
-  { name: "Plains", scape: "plains", night: 0,
-    sky: 0x86c8e8, fogNear: 70, fogFar: 380,
-    hemiSky: 0xbfe3ff, hemiGround: 0x4a6b3a, hemiInt: 1.0,
-    sunColor: 0xfff1da, sunInt: 1.0, grass: 0x2f9e44 },
-  { name: "Desert", scape: "desert", night: 0,
-    sky: 0xf2c879, fogNear: 95, fogFar: 440,            // warm haze, long sightlines
-    hemiSky: 0xffe6b0, hemiGround: 0x9c6b3f, hemiInt: 1.05,
-    sunColor: 0xfff0d0, sunInt: 1.2, grass: 0xc9a063 },  // sandy ground
-  { name: "City", scape: "city", night: 0.5,
-    sky: 0x3b3552, fogNear: 60, fogFar: 320,             // dusk over the skyline
-    hemiSky: 0x7a7ba6, hemiGround: 0x22232c, hemiInt: 0.82,
-    sunColor: 0xffb070, sunInt: 0.75, grass: 0x33343d },  // asphalt/concrete
-  { name: "Neon Paradise", scape: "neon", night: 1,
-    sky: 0x0a0618, fogNear: 48, fogFar: 300,             // dark, lit by glow
-    hemiSky: 0x3a1f6b, hemiGround: 0x0a0618, hemiInt: 0.5,
-    sunColor: 0xb070ff, sunInt: 0.55, grass: 0x140b26 },
-  { name: "Plains", scape: "plains", night: 1,           // night drive back toward dawn
-    sky: 0x050811, fogNear: 48, fogFar: 290,
-    hemiSky: 0x2b3a64, hemiGround: 0x06080f, hemiInt: 0.6,
-    sunColor: 0xaec2ff, sunInt: 0.85, grass: 0x10331e },
+// ---- Environments -------------------------------------------------------
+// You PICK one environment to drive in (free Plains by default, the rest bought
+// with credits — see the Environments screen). Each is a self-contained world:
+// a `scape` (roadside prop palette, see spawnScenery) plus a `day` and `night`
+// param block that the engine blends between as you drive. Day<->night rides on
+// the distance you've covered (DAYNIGHT_CYCLE_KM per full lap); `startNight`
+// flips the phase so a run opens after dark, and `nightOnly` pins it to night
+// (Neon Paradise is always lit). Each param block carries:
+//   sky/fog colour + range, hemi + sun lights, and grass = the ground colour
+//   (so it doubles as sand / asphalt / neon-slick tarmac per environment).
+const DAYNIGHT_CYCLE_KM = 12;   // distance for one full day->night->day lap
+const ENVIRONMENTS = [
+  { id: "plains", name: "Plains", scape: "plains", price: 0,
+    blurb: "Rolling green country roads. Where every driver starts out.",
+    day: { sky: 0x86c8e8, fogNear: 70, fogFar: 380, hemiSky: 0xbfe3ff, hemiGround: 0x4a6b3a, hemiInt: 1.0, sunColor: 0xfff1da, sunInt: 1.0, grass: 0x2f9e44 },
+    night: { sky: 0x050811, fogNear: 48, fogFar: 290, hemiSky: 0x2b3a64, hemiGround: 0x06080f, hemiInt: 0.6, sunColor: 0xaec2ff, sunInt: 0.85, grass: 0x10331e } },
+  { id: "desert", name: "Desert", scape: "desert", price: 5000,
+    blurb: "Sun-baked dunes and saguaro by day; cool, starlit sand by night.",
+    day: { sky: 0xf2c879, fogNear: 95, fogFar: 440, hemiSky: 0xffe6b0, hemiGround: 0x9c6b3f, hemiInt: 1.05, sunColor: 0xfff0d0, sunInt: 1.2, grass: 0xc9a063 },
+    night: { sky: 0x161229, fogNear: 72, fogFar: 380, hemiSky: 0x39487a, hemiGround: 0x2b2438, hemiInt: 0.58, sunColor: 0xc2d2ff, sunInt: 0.72, grass: 0x5a4f54 } },
+  { id: "city", name: "City", scape: "city", price: 15000, startNight: true,
+    blurb: "Glass towers and streetlights. The night shift never really ends.",
+    day: { sky: 0x9fb6cf, fogNear: 60, fogFar: 340, hemiSky: 0xd5e3f0, hemiGround: 0x4a4d57, hemiInt: 1.0, sunColor: 0xfff4e2, sunInt: 1.0, grass: 0x44474f },
+    night: { sky: 0x0e1020, fogNear: 55, fogFar: 300, hemiSky: 0x3a3f63, hemiGround: 0x141620, hemiInt: 0.6, sunColor: 0x9fb0ff, sunInt: 0.6, grass: 0x23252d } },
+  { id: "neon", name: "Neon Paradise", scape: "neon", price: 40000, nightOnly: true,
+    blurb: "Endless electric night. Pure glow, no sunrise — the dream lives here.",
+    night: { sky: 0x0a0618, fogNear: 48, fogFar: 300, hemiSky: 0x3a1f6b, hemiGround: 0x0a0618, hemiInt: 0.5, sunColor: 0xb070ff, sunInt: 0.55, grass: 0x140b26 } },
 ];
+const getEnv = (id) => ENVIRONMENTS.find((e) => e.id === id) || ENVIRONMENTS[0];
 
 let traffic = [];
 let scenery = [];
@@ -1630,35 +1637,41 @@ function reconcile(group, list, make, place) {
 const _biomeSky = new THREE.Color(0x86c8e8);
 const _biomeTmp = new THREE.Color();
 let nightFactor = 0;          // 0 day .. 1 night; drives headlight + street-lamp glow
-let biomeShown = null;        // dominant biome currently named in the HUD
+let biomeShown = null;        // label currently named in the HUD (env + time of day)
 const smoothstep = (t) => t * t * (3 - 2 * t);
 
-// Walk the region ring. Progress p (0..1) spans the whole lap; each region owns
-// an equal slice. Inside a slice we HOLD on that region (so it reads clearly),
-// then blend into the next one over the slice's tail. Returns the two region
-// indices to mix and the blend t (0 = pure a, 1 = pure b).
-const RING_HOLD = 0.6; // fraction of each slice spent fully in the region
-function ringSample(p) {
-  const n = BIOMES.length;
-  const seg = ((p % 1 + 1) % 1) * n;
-  const i = Math.floor(seg) % n;
-  const f = seg - Math.floor(seg);                 // 0..1 within the slice
-  const t = f < RING_HOLD ? 0 : smoothstep((f - RING_HOLD) / (1 - RING_HOLD));
-  return { a: i, b: (i + 1) % n, t };
+// Map progress through one day (u: 0..1) to a night factor (0 day .. 1 night).
+// Night owns the long middle stretch; day is a short window with quick dusk/dawn.
+function nightFactorAt(u) {
+  const duskA = 0.12, duskB = 0.34, dawnA = 0.80, dawnB = 0.99;
+  if (u < duskA) return 0;                                             // day
+  if (u < duskB) return smoothstep((u - duskA) / (duskB - duskA));     // dusk -> night
+  if (u < dawnA) return 1;                                             // night (long)
+  if (u < dawnB) return 1 - smoothstep((u - dawnA) / (dawnB - dawnA)); // dawn -> day
+  return 0;
 }
 
-// The roadside-prop palette at a given distance (km) — picked by the dominant
-// region there, so scenery spawned far ahead matches the ground it lands on.
-function scapeAt(km) {
-  const { a, b, t } = ringSample(km / BIOME_CYCLE_KM);
-  return (t < 0.5 ? BIOMES[a] : BIOMES[b]).scape;
+// The selected environment owns the whole run, so its prop palette is fixed.
+function scapeAt(_km) {
+  return getEnv(selectedEnv).scape;
 }
 
-// Sample the region ring at the given distance (km) and push the blended
-// environment onto the scene, lights, grass and shared car/lamp materials.
+// How far through the day we are at distance km, for the selected environment.
+// `startNight` shifts the phase half a lap so the run opens after dark.
+function dayPhase(km) {
+  const env = getEnv(selectedEnv);
+  if (env.nightOnly) return 1;
+  const u = km / DAYNIGHT_CYCLE_KM + (env.startNight ? 0.5 : 0);
+  return nightFactorAt(((u % 1) + 1) % 1);
+}
+
+// Blend the selected environment's day<->night palette at distance km and push
+// it onto the scene, lights, grass and shared car/lamp materials.
 function applyBiome(km) {
-  const { a: ia, b: ib, t } = ringSample(km / BIOME_CYCLE_KM);
-  const a = BIOMES[ia], b = BIOMES[ib];
+  const env = getEnv(selectedEnv);
+  const t = dayPhase(km);
+  const a = env.day || env.night;   // night-only envs reuse `night` as both ends
+  const b = env.night;
   const mix = (ka, kb) => ka + (kb - ka) * t;
 
   _biomeSky.set(a.sky).lerp(_biomeTmp.set(b.sky), t);
@@ -1676,18 +1689,19 @@ function applyBiome(km) {
 
   grassMat.color.set(a.grass).lerp(_biomeTmp.set(b.grass), t);
 
-  nightFactor = mix(a.night, b.night);
+  nightFactor = t;
   _matHead.emissiveIntensity = 0.9 + nightFactor * 1.7; // headlights burn brighter after dark
   _matTail.emissiveIntensity = 0.9 + nightFactor * 1.1;
   // City/neon windows + street lamps catch fire as the light fails.
   if (_matWindow) _matWindow.emissiveIntensity = 0.1 + nightFactor * 1.7;
   if (_matLamp)   _matLamp.emissiveIntensity   = 0.25 + nightFactor * 2.4;
 
-  const dom = (t < 0.5 ? a : b).name;
-  if (dom !== biomeShown) showBiome(dom);
+  // Name the environment, and (for day/night ones) the time of day we're in.
+  const label = env.nightOnly ? env.name : `${env.name} · ${t < 0.5 ? "Day" : "Night"}`;
+  if (label !== biomeShown) showBiome(label);
 }
 
-// Briefly name the biome we just crossed into, top-center on the HUD.
+// Briefly name the environment / time of day, top-center on the HUD.
 function showBiome(name) {
   biomeShown = name;
   const el = document.getElementById("biome");
@@ -2062,9 +2076,8 @@ function floatDelta(anchor, text, cls) {
   ).onfinish = () => el.remove();
 }
 
-// "UNLOCKED" banner over the showroom when a car is bought.
-function celebrate(name) {
-  const host = document.querySelector(".showroom");
+// "UNLOCKED" banner over a showroom when a car / environment is bought.
+function celebrate(name, host = document.querySelector(".showroom")) {
   if (!host) return;
   const b = document.createElement("div");
   b.className = "unlock-banner";
@@ -2106,10 +2119,11 @@ function showMenu() {
       ${goalsPanelHTML()}
     </div>
     <div class="home-bottom">
-      <p class="home-car">Now driving · <b style="color:${car.color}">${car.name}</b></p>
+      <p class="home-car">Now driving · <b style="color:${car.color}">${car.name}</b> · <b class="home-env">${getEnv(selectedEnv).name}</b></p>
       <div class="menu-btns">
         <button id="start-btn">Start</button>
         <button id="garage-btn" class="alt">Garage</button>
+        <button id="envs-btn" class="alt">Environments</button>
         <button id="settings-btn" class="alt">Settings</button>
       </div>
       <p class="controls">↑/W gas · ↓/S brake · ←→/AD steer · M mute · Esc/P pause</p>
@@ -2119,6 +2133,7 @@ function showMenu() {
   document.body.classList.remove("playing");
   document.getElementById("start-btn").addEventListener("click", startGame);
   document.getElementById("garage-btn").addEventListener("click", openGarage);
+  document.getElementById("envs-btn").addEventListener("click", openEnvironments);
   document.getElementById("settings-btn").addEventListener("click", showSettings);
   startIdle(); // bring the hero car / road to life behind the menu
 }
@@ -2436,6 +2451,114 @@ function handleCarClick(id) {
   updateGarageBank();
   refreshShowroom();
   showMenu(); // refresh wallet/selected car behind
+}
+
+// ---- Environments screen ----
+// Mirrors the garage: flip through the worlds, unlock with credits, pick one to
+// drive. The preview is a pure-CSS "diorama" built from the environment's own
+// palette, so it costs nothing to render and always matches the live look.
+let envBuilt = false;
+let envIndex = 0;
+const hexColor = (n) => "#" + (n >>> 0).toString(16).padStart(6, "0");
+
+// Sky -> ground gradient swatch with a scape icon, previewing an env at a glance.
+function envDiorama(env) {
+  const p = env.day || env.night;   // headline look (day if it has one, else night)
+  const ico = { plains: "🌳", desert: "🌵", city: "🏙️", neon: "🌆" }[env.scape] || "🛣️";
+  return `<div class="env-diorama" style="background:linear-gradient(180deg,
+      ${hexColor(p.sky)} 0%, ${hexColor(p.sky)} 56%, ${hexColor(p.grass)} 57%, ${hexColor(p.grass)} 100%)">
+      <span class="env-ico">${ico}</span>
+    </div>`;
+}
+
+function openEnvironments() {
+  const g = document.getElementById("environments");
+  if (!envBuilt) {
+    g.innerHTML = `
+      <h2>Environments ${walletPill("env-credits")}</h2>
+      <div class="showroom env-showroom">
+        <button class="arrow" id="env-prev" aria-label="Previous environment">‹</button>
+        <div id="env-preview"></div>
+        <button class="arrow" id="env-next" aria-label="Next environment">›</button>
+      </div>
+      <div id="env-info"></div>
+      <button id="env-back">Back</button>
+    `;
+    document.getElementById("env-prev").addEventListener("click", () => navEnv(-1));
+    document.getElementById("env-next").addEventListener("click", () => navEnv(1));
+    document.getElementById("env-back").addEventListener("click", closeEnvironments);
+    envBuilt = true;
+  }
+  g.classList.remove("hidden");
+  envIndex = Math.max(0, ENVIRONMENTS.findIndex((e) => e.id === selectedEnv));
+  rollNumber(document.getElementById("env-credits"), bank);
+  refreshEnv();
+}
+
+function closeEnvironments() {
+  document.getElementById("environments").classList.add("hidden");
+  showMenu(); // refresh the menu's selected-env line + wallet (idle hero keeps running)
+}
+
+function navEnv(dir) {
+  envIndex = (envIndex + dir + ENVIRONMENTS.length) % ENVIRONMENTS.length;
+  audioTick();
+  refreshEnv();
+}
+
+function refreshEnv() {
+  const e = ENVIRONMENTS[envIndex];
+  const isOwned = ownedEnvs.includes(e.id);
+  const isSel = selectedEnv === e.id;
+  const accent = hexColor((e.day || e.night).sky);
+
+  let action;
+  if (isSel) action = `<span class="tag sel">★ Selected</span>`;
+  else if (isOwned) action = `<button class="alt env-btn" data-env="${e.id}">Drive here</button>`;
+  else action = `<button class="env-btn buy" data-env="${e.id}" ${bank < e.price ? "disabled" : ""}>Unlock ${credCost(e.price)}</button>`;
+
+  const timeBadge = e.nightOnly ? "🌙 Night only"
+    : e.startNight ? "🌙 → ☀️ Day & night · opens at night"
+    : "☀️ → 🌙 Day & night";
+
+  const sr = document.querySelector(".env-showroom");
+  if (sr) { sr.className = `showroom env-showroom${isOwned ? "" : " locked"}`; sr.style.setProperty("--accent", accent); }
+
+  document.getElementById("env-preview").innerHTML = envDiorama(e);
+  document.getElementById("env-info").innerHTML = `
+    <div class="car-head">
+      <span class="rarity" style="--rc:${accent}">${timeBadge}</span>
+      <span class="owned-count">${ownedEnvs.length}/${ENVIRONMENTS.length} unlocked</span>
+    </div>
+    <div class="car-title" style="color:${accent}">${e.name}</div>
+    <p class="car-blurb">${e.blurb}</p>
+    ${isOwned ? "" : `<p class="locked-note">🔒 Unlock to drive in this world.</p>`}
+    <div class="showroom-actions">${action}</div>
+  `;
+  document.getElementById("env-info").querySelectorAll(".env-btn").forEach((btn) =>
+    btn.addEventListener("click", () => handleEnvClick(btn.dataset.env)));
+}
+
+function handleEnvClick(id) {
+  const e = getEnv(id);
+  if (ownedEnvs.includes(id)) {
+    selectedEnv = id;
+    audioTick();
+  } else if (bank >= e.price) {
+    const btn = document.querySelector(`.env-btn[data-env="${id}"]`);
+    bank -= e.price;
+    ownedEnvs.push(id);
+    selectedEnv = id;
+    audioUnlock();
+    floatDelta(btn, `- ${fmt(e.price)}`, "spend");
+    celebrate(e.name, document.querySelector(".env-showroom"));
+  } else {
+    audioDenied();
+    return;
+  }
+  saveProgress();
+  rollNumber(document.getElementById("env-credits"), bank);
+  refreshEnv();
 }
 
 document.getElementById("mute").addEventListener("click", toggleMute);
