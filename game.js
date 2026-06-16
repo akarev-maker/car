@@ -138,6 +138,7 @@ let speedUnit = "kmh";      // "kmh" | "mph" — display only; internal units un
 let quality = "high";       // "high" | "low" — Low caps the render resolution for slow GPUs
 const QUALITY_DPR = { high: 1.5, low: 1.0 }; // pixel-ratio cap per quality (fill-rate lever)
 let highScore = 0;
+let goals = null;  // daily goals: { date, items:[{id,target,reward,progress,done}] } — see goals.js section
 
 // Internal speed -> display number. 1 internal unit = 3 km/h; mph = km/h × 0.621371.
 const SPEED_UNITS = { kmh: { factor: 3, label: "km/h" }, mph: { factor: 1.864113, label: "mph" } };
@@ -158,7 +159,9 @@ function loadProgress() {
     muted = localStorage.getItem("tr_muted") === "1";
     highScore = parseInt(localStorage.getItem("tr_hi")) || 0;
     upgrades = JSON.parse(localStorage.getItem("tr_upg")) || {};
+    goals = JSON.parse(localStorage.getItem("tr_goals")) || null;
   } catch (e) { /* use defaults */ }
+  ensureGoals(); // (re)generate today's set if missing or stale
   if (!owned.includes("hatch")) owned.push("hatch");
   if (!owned.includes(selectedCar)) selectedCar = "hatch";
   // Backfill any missing cars/tracks and clamp saved levels.
@@ -180,7 +183,92 @@ function saveProgress() {
     localStorage.setItem("tr_muted", muted ? "1" : "0");
     localStorage.setItem("tr_hi", highScore);
     localStorage.setItem("tr_upg", JSON.stringify(upgrades));
+    localStorage.setItem("tr_goals", JSON.stringify(goals));
   } catch (e) { /* ignore */ }
+}
+
+// ---- Daily goals ----
+// Three goals refresh each calendar day, picked deterministically from the date
+// so they're identical across reloads on the same day. Progress rolls in at the
+// end of every run; finishing one credits its reward instantly. "max" goals want
+// a single-run best; "sum" goals accumulate across the whole day.
+const GOAL_POOL = [
+  { id: "dist", mode: "max", stat: (r) => r.distKm,
+    tiers: [[3, 150], [5, 300], [8, 500]],
+    fmt: (t) => `Drive ${t} km in a single run`,
+    prog: (p, t) => `${Math.min(p, t).toFixed(1)} / ${t} km` },
+  { id: "score", mode: "max", stat: (r) => r.score,
+    tiers: [[3000, 150], [6000, 320], [10000, 550]],
+    fmt: (t) => `Score ${fmt(t)} in a single run`,
+    prog: (p, t) => `${fmt(Math.min(Math.floor(p), t))} / ${fmt(t)}` },
+  { id: "passed", mode: "sum", stat: (r) => r.passed,
+    tiers: [[60, 150], [120, 320], [200, 550]],
+    fmt: (t) => `Pass ${t} cars today`,
+    prog: (p, t) => `${Math.min(Math.floor(p), t)} / ${t}` },
+  { id: "combo", mode: "max", stat: (r) => r.maxCombo,
+    tiers: [[6, 150], [10, 320], [15, 550]],
+    fmt: (t) => `Chain a ${t}-pass near-miss combo`,
+    prog: (p, t) => `${Math.min(Math.floor(p), t)} / ${t}` },
+  { id: "earn", mode: "sum", stat: (r) => r.earned,
+    tiers: [[400, 120], [900, 260], [1500, 450]],
+    fmt: (t) => `Earn ${fmt(t)} CR today`,
+    prog: (p, t) => `${fmt(Math.min(Math.floor(p), t))} / ${fmt(t)}` },
+];
+const goalTmpl = (id) => GOAL_POOL.find((g) => g.id === id);
+
+// FNV-1a hash of the date string -> seed; mulberry32 for a stable daily shuffle.
+function _goalSeed(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+function _goalRng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const _todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
+
+function genGoals(date) {
+  const rand = _goalRng(_goalSeed(date));
+  const pool = GOAL_POOL.slice();
+  const items = [];
+  while (items.length < 3 && pool.length) {
+    const t = pool.splice(Math.floor(rand() * pool.length), 1)[0];
+    const [target, reward] = t.tiers[Math.floor(rand() * t.tiers.length)];
+    items.push({ id: t.id, target, reward, progress: 0, done: false });
+  }
+  return { date, items };
+}
+function ensureGoals() {
+  const today = _todayStr();
+  if (!goals || goals.date !== today || !Array.isArray(goals.items)) goals = genGoals(today);
+}
+
+// Roll a finished run's stats into today's goals; returns the goals just completed.
+function trackGoals() {
+  ensureGoals();
+  const r = {
+    distKm: state.position / DIST_DIV,
+    score: state.score,
+    passed: state.passed,
+    maxCombo: state.maxCombo,
+    earned: lastEarned,
+  };
+  const done = [];
+  for (const it of goals.items) {
+    if (it.done) continue;
+    const t = goalTmpl(it.id);
+    if (!t) continue;
+    const v = t.stat(r) || 0;
+    it.progress = t.mode === "sum" ? it.progress + v : Math.max(it.progress, v);
+    if (it.progress >= it.target) { it.done = true; bank += it.reward; done.push(it); }
+  }
+  return done;
 }
 
 // ---- State ----
@@ -1598,6 +1686,7 @@ function endRun(crashed, toHome) {
   bank += lastEarned;
   const isHi = state.score > highScore;
   if (isHi) highScore = state.score;
+  goalsJustDone = trackGoals(); // may add goal rewards to the bank too
   saveProgress();
 
   // Quitting (Esc) banks the run and drops straight to the home menu; a crash
@@ -1633,6 +1722,8 @@ function showResults(isHi) {
         ${stat("Best ever", fmt(highScore))}
       </div>
       <div class="results-earn">+ <span class="cred">${CRED_ICO}<span class="cred-num" id="earn-num" data-val="0">0</span></span> CR earned</div>
+      ${goalsJustDone.length ? `<div class="results-goals">${goalsJustDone.map((it) =>
+        `<div class="rgoal">✓ ${goalTmpl(it.id).fmt(it.target)} <b>+${it.reward}</b></div>`).join("")}</div>` : ""}
       <div class="results-btns">
         <button id="retry-btn">Retry</button>
         <button id="r-garage" class="alt">Garage</button>
@@ -1663,6 +1754,7 @@ function celebrateBest() {
 // ---- Currency (Credits) + UI helpers ----
 let pendingEarn = 0; // credits earned on the last run, animated into the wallet
 let lastEarned = 0;  // credits granted by the most recent run (shown on results)
+let goalsJustDone = []; // daily goals completed by the most recent run (shown on results)
 const CRED_ICO = '<svg class="cred-ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#cred-coin"/></svg>';
 const fmt = (n) => Math.round(n).toLocaleString();
 const credCost = (n) => `<span class="cred">${CRED_ICO}<span class="cred-num">${fmt(n)}</span></span>`;
@@ -1719,6 +1811,22 @@ function celebrate(name) {
 }
 
 // ---- Menu + Garage UI ----
+// One day's goals as a compact panel for the home screen.
+function goalsPanelHTML() {
+  ensureGoals();
+  const row = (it) => {
+    const t = goalTmpl(it.id);
+    const pct = Math.round(clamp(it.progress / it.target, 0, 1) * 100);
+    return `<div class="goal ${it.done ? "done" : ""}">
+      <div class="goal-top"><span class="goal-text">${t.fmt(it.target)}</span>` +
+      `<span class="goal-rew">${it.done ? "✓ Done" : CRED_ICO + " " + it.reward}</span></div>
+      <div class="goal-bar"><i style="width:${pct}%"></i></div>
+      <span class="goal-prog">${t.prog(it.progress, it.target)}</span>
+    </div>`;
+  };
+  return `<div class="goals"><div class="goals-head">DAILY GOALS</div>${goals.items.map(row).join("")}</div>`;
+}
+
 function showMenu() {
   const car = getCar(selectedCar);
   const overlay = document.getElementById("overlay");
@@ -1726,6 +1834,7 @@ function showMenu() {
     <div class="home-top">
       <h1 class="home-logo">TRAFFIC <span>RACER</span></h1>
       <p class="home-stats">${walletPill("menu-credits")} &nbsp;·&nbsp; <span class="best">🏆 ${fmt(highScore)}</span> &nbsp;·&nbsp; <span class="best">🚗 ${owned.length}/${CARS.length}</span></p>
+      ${goalsPanelHTML()}
     </div>
     <div class="home-bottom">
       <p class="home-car">Now driving · <b style="color:${car.color}">${car.name}</b></p>
@@ -1734,7 +1843,7 @@ function showMenu() {
         <button id="garage-btn" class="alt">Garage</button>
         <button id="settings-btn" class="alt">Settings</button>
       </div>
-      <p class="controls">↑/W gas · ↓/S brake · ←→/AD steer · M mute · Esc stop</p>
+      <p class="controls">↑/W gas · ↓/S brake · ←→/AD steer · M mute · Esc/P pause</p>
     </div>
   `;
   overlay.classList.remove("hidden");
