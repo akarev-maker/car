@@ -283,7 +283,68 @@ button:disabled {
 .menu-btns {
   display: flex;
   gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
 }
+
+/* ---- Challenges screen ---- */
+.chal-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  max-width: 520px;
+}
+.chal-list { width: 100%; display: flex; flex-direction: column; gap: 14px; }
+.chal-tier {
+  background: var(--glass);
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  padding: 10px 12px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.chal-tier.locked { opacity: 0.55; }
+.chal-tier-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  font-size: 13px;
+  color: var(--accent);
+  margin: 2px 4px 8px;
+}
+.chal-count { color: var(--text-dim); font-size: 12px; letter-spacing: 0.5px; }
+.chal {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 13.5px;
+  text-align: left;
+}
+.chal-ico { display: inline-flex; color: var(--text-dim); }
+.chal-ico .ico { width: 17px; height: 17px; }
+.chal-desc { flex: 1; }
+.chal-rew {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 700;
+  color: var(--gold);
+  white-space: nowrap;
+}
+.chal-rew .cred-ico { width: 13px; height: 13px; }
+.chal-rew .ico { width: 13px; height: 13px; }
+.chal.done { opacity: 0.65; }
+.chal.done .chal-ico { color: #5ef0b0; }
+.chal.done .chal-rew { color: #5ef0b0; }
+.chal.locked .chal-desc { color: var(--text-dim); }
 
 /* ---- Traffic-mode segmented toggle ---- */
 .mode-toggle {

@@ -150,6 +150,7 @@ let owned = ["hatch"];
 let selectedCar = "hatch";
 let ownedEnvs = ["plains"];  // unlocked driving environments (Plains is free)
 let selectedEnv = "plains";  // the environment the next run takes place in
+let challengesDone = [];     // ids of completed progression challenges
 let trafficMode = "twoway"; // "oneway" (all lanes your way) | "twoway" (oncoming half)
 let trafficDensity = "medium"; // "low" | "medium" | "high" — see TRAFFIC_DENSITY
 const densityCfg = () => TRAFFIC_DENSITY[trafficDensity] || TRAFFIC_DENSITY.medium;
@@ -176,6 +177,7 @@ function loadProgress() {
     selectedCar = localStorage.getItem("tr_selected") || "hatch";
     ownedEnvs = JSON.parse(localStorage.getItem("tr_envs")) || ["plains"];
     selectedEnv = localStorage.getItem("tr_env") || "plains";
+    challengesDone = JSON.parse(localStorage.getItem("tr_chal")) || [];
     trafficMode = localStorage.getItem("tr_mode") === "oneway" ? "oneway" : "twoway";
     trafficDensity = TRAFFIC_DENSITY[localStorage.getItem("tr_density")] ? localStorage.getItem("tr_density") : "medium";
     speedUnit = localStorage.getItem("tr_unit") === "kmh" ? "kmh" : "mph"; // default mph for new players
@@ -207,6 +209,7 @@ function saveProgress() {
     localStorage.setItem("tr_selected", selectedCar);
     localStorage.setItem("tr_envs", JSON.stringify(ownedEnvs));
     localStorage.setItem("tr_env", selectedEnv);
+    localStorage.setItem("tr_chal", JSON.stringify(challengesDone));
     localStorage.setItem("tr_mode", trafficMode);
     localStorage.setItem("tr_density", trafficDensity);
     localStorage.setItem("tr_unit", speedUnit);
@@ -396,6 +399,72 @@ function goalToast(it) {
   audioUnlock();
 }
 
+// ---- Progression challenges ----
+// A tiered ladder of one-time skill challenges, separate from the daily/weekly
+// goals. Each rewards credits; a tier unlocks once the previous one is fully
+// cleared, giving a sense of a career to climb. `stat` names a field on the
+// run-stats object (the same values goals read, plus per-run slow-mo / shield
+// counters); a challenge completes the first run that meets `target`.
+const CHALLENGES = [
+  { tier: "Rookie", items: [
+    { id: "rk-pass",  stat: "passed",   target: 40,    reward: 200, desc: "Pass 40 cars in a single run" },
+    { id: "rk-dist",  stat: "distKm",   target: 3,     reward: 200, desc: "Drive 3 km in a single run" },
+    { id: "rk-spd",   stat: "topSpeed", target: 36,    reward: 200, desc: () => `Hit ${spd(36)} ${spdLabel()}` },
+  ]},
+  { tier: "Pro", items: [
+    { id: "pr-pass",  stat: "passed",   target: 90,    reward: 400, desc: "Pass 90 cars in a single run" },
+    { id: "pr-score", stat: "score",    target: 12000, reward: 400, desc: "Score 12,000 in a single run" },
+    { id: "pr-combo", stat: "maxCombo", target: 10,    reward: 400, desc: "Chain a 10-pass near-miss combo" },
+    { id: "pr-slow",  stat: "slowmos",  target: 1,     reward: 400, desc: "Trigger a slow-mo with a razor-close pass" },
+  ]},
+  { tier: "Ace", items: [
+    { id: "ac-shield",stat: "shields",  target: 1,     reward: 600, desc: "Earn and use a shield" },
+    { id: "ac-dist",  stat: "distKm",   target: 8,     reward: 600, desc: "Drive 8 km in a single run" },
+    { id: "ac-combo", stat: "maxCombo", target: 18,    reward: 600, desc: "Chain an 18-pass near-miss combo" },
+    { id: "ac-spd",   stat: "topSpeed", target: 52,    reward: 600, desc: () => `Hit ${spd(52)} ${spdLabel()}` },
+  ]},
+  { tier: "Legend", items: [
+    { id: "lg-score", stat: "score",    target: 30000, reward: 1200, desc: "Score 30,000 in a single run" },
+    { id: "lg-pass",  stat: "passed",   target: 160,   reward: 1200, desc: "Pass 160 cars in a single run" },
+    { id: "lg-slow",  stat: "slowmos",  target: 3,     reward: 1200, desc: "Trigger 3 slow-mos in one run" },
+  ]},
+];
+const _chalDesc = (it) => (typeof it.desc === "function" ? it.desc() : it.desc);
+const chalDone = (id) => challengesDone.includes(id);
+const tierUnlocked = (i) => i === 0 || CHALLENGES[i - 1].items.every((it) => chalDone(it.id));
+
+function runStatsNow() {
+  return {
+    distKm: state.position / DIST_DIV, score: state.score, passed: state.passed,
+    maxCombo: state.maxCombo, topSpeed: state.topSpeed,
+    slowmos: state.runSlowmos, shields: state.runShields,
+  };
+}
+// Complete + reward any challenge met by the current run, in unlocked tiers.
+// Tiers are walked in order so finishing one can cascade into the next here.
+function checkChallenges(r) {
+  const done = [];
+  CHALLENGES.forEach((tier, i) => {
+    if (!tierUnlocked(i)) return;
+    for (const it of tier.items) {
+      if (chalDone(it.id)) continue;
+      if ((r[it.stat] || 0) >= it.target) { challengesDone.push(it.id); bank += it.reward; done.push(it); }
+    }
+  });
+  return done;
+}
+function checkChallengesLive() {
+  const done = checkChallenges(runStatsNow());
+  if (done.length) { saveProgress(); for (const it of done) challengeToast(it); }
+}
+function challengeToast(it) {
+  showToast(
+    `<span class="toast-ico evt">${ico("ico-trophy")}</span>` +
+    `<div class="toast-body"><b>Challenge complete</b><span>${_chalDesc(it)}</span></div>` +
+    `<span class="toast-rew">${CRED_ICO}${it.reward}</span>`, "event");
+  audioUnlock();
+}
+
 // ---- State ----
 const state = {
   running: false,
@@ -428,6 +497,8 @@ const state = {
   maxCombo: 0,
   passed: 0,
   topSpeed: 0,
+  runSlowmos: 0,    // exceptional-pass slow-mos this run (for challenges)
+  runShields: 0,    // shield saves this run (for challenges)
 };
 
 const COMBO_WINDOW = 150;   // frames (~2.5s) to land the next near-miss
@@ -1156,6 +1227,7 @@ function update() {
           const exceptional = closeness > SLOWMO_CLOSE && speedFactor > 0.7;
           if (exceptional && state.slowmoCD <= 0) {
             state.slowmoT = SLOWMO_MS; state.slowmoCD = SLOWMO_CD;
+            state.runSlowmos++;
             audioSlowmo();
           }
           // Near-misses charge a shield (closer = more); fills to one held shield
@@ -1208,6 +1280,7 @@ function update() {
   state.kick *= 0.8;
   state.whiteout *= 0.85;
   checkGoalsLive(); // celebrate the moment a daily goal is met, mid-run
+  checkChallengesLive(); // and progression challenges
   // NOTE: HUD + engine audio are presentation, not physics. They run once per
   // rendered frame from loop(), never inside this (possibly multi-step) update.
 }
@@ -1228,6 +1301,7 @@ function sideswipe(pan) {
 // shield "reforms". Sold with bullet-time, a cyan burst, shake and a chime.
 function shieldSave(pan) {
   state.shield = false;
+  state.runShields++;
   state.invuln = SHIELD_INVULN;
   state.speed *= 0.55;
   state.combo = 0; state.mult = 1; state.comboTimer = 0;
@@ -2263,6 +2337,7 @@ function resetRunState() {
   state.flash = state.hitFlash = state.shake = 0;
   state.combo = 0; state.comboTimer = 0; state.mult = 1;
   state.maxCombo = 0; state.passed = 0; state.topSpeed = 0;
+  state.runSlowmos = 0; state.runShields = 0;
   state.kick = 0; state.flashHue = 0; state.whiteout = 0;
   state.slowmoT = 0; state.slowmoCD = 0;
   state.shield = false; state.shieldCharge = 0; state.invuln = 0;
@@ -2471,6 +2546,7 @@ function showMenu() {
         <button id="start-btn">Start</button>
         <button id="garage-btn" class="alt">Garage</button>
         <button id="envs-btn" class="alt">Environments</button>
+        <button id="chal-btn" class="alt">Challenges</button>
         <button id="settings-btn" class="alt">Settings</button>
       </div>
       <p class="controls">↑/W gas · ↓/S brake · ←→/AD steer · M mute · Esc/P pause</p>
@@ -2481,6 +2557,7 @@ function showMenu() {
   document.getElementById("start-btn").addEventListener("click", startGame);
   document.getElementById("garage-btn").addEventListener("click", openGarage);
   document.getElementById("envs-btn").addEventListener("click", openEnvironments);
+  document.getElementById("chal-btn").addEventListener("click", openChallenges);
   document.getElementById("settings-btn").addEventListener("click", showSettings);
   startIdle(); // bring the hero car / road to life behind the menu
 }
@@ -2507,6 +2584,40 @@ function setQuality(q) {
   quality = q;
   if (renderer) { renderer.setPixelRatio(qualityCap()); onResize(); } // apply live
   saveProgress();
+}
+
+// The progression ladder, rendered into the menu overlay. Tiers unlock in
+// order; each row shows its reward, or a check once cleared.
+function openChallenges() {
+  const overlay = document.getElementById("overlay");
+  const tiers = CHALLENGES.map((tier, i) => {
+    const unlocked = tierUnlocked(i);
+    const rows = tier.items.map((it) => {
+      const done = chalDone(it.id);
+      const icon = done ? ico("ico-check") : unlocked ? ico("ico-trophy") : ico("ico-lock");
+      const rew = done ? `${ico("ico-check")} Done` : `${CRED_ICO} ${fmt(it.reward)}`;
+      return `<div class="chal ${done ? "done" : ""}${unlocked ? "" : " locked"}">
+        <span class="chal-ico">${icon}</span>
+        <span class="chal-desc">${_chalDesc(it)}</span>
+        <span class="chal-rew">${rew}</span>
+      </div>`;
+    }).join("");
+    const cleared = tier.items.filter((it) => chalDone(it.id)).length;
+    return `<div class="chal-tier${unlocked ? "" : " locked"}">
+      <div class="chal-tier-head"><span>${tier.tier}</span><span class="chal-count">${cleared}/${tier.items.length}</span></div>
+      ${rows}
+    </div>`;
+  }).join("");
+  overlay.innerHTML = `
+    <div class="chal-screen">
+      <h2>Challenges</h2>
+      <div class="chal-list">${tiers}</div>
+      <button id="chal-back">Back</button>
+    </div>`;
+  overlay.classList.remove("hidden");
+  document.body.classList.remove("playing");
+  document.getElementById("chal-back").addEventListener("click", showMenu);
+  startIdle(); // keep the hero road alive behind the panel
 }
 
 // A simple settings screen rendered into the same overlay as the menu. Each
