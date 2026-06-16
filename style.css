@@ -4,10 +4,30 @@
   box-sizing: border-box;
 }
 
+/* ---- Design tokens (Sleek dark glass) ----------------------------------
+   Two-accent system: CYAN is the interactive/interface accent (buttons,
+   toggles, headings, selection); GOLD stays for currency, rewards and medals
+   so money reads as money. Glass = translucent panels over the live 3D road. */
+:root {
+  --accent: #38e1ff;
+  --accent-deep: #21c4e8;
+  --accent-soft: rgba(56, 225, 255, 0.16);
+  --accent-line: rgba(56, 225, 255, 0.45);
+  --gold: #ffd166;
+  --text: #eaf2f8;
+  --text-dim: #9aa7b8;
+  --glass: rgba(255, 255, 255, 0.055);
+  --glass-strong: rgba(255, 255, 255, 0.1);
+  --hairline: rgba(255, 255, 255, 0.12);
+  --radius: 14px;
+  --font-display: "Sora", system-ui, sans-serif;
+  --font-body: "Manrope", system-ui, sans-serif;
+}
+
 body {
-  background: #0f0f1e;
-  font-family: "Segoe UI", system-ui, sans-serif;
-  color: #fff;
+  background: #0b0e16;
+  font-family: var(--font-body);
+  color: var(--text);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -146,7 +166,7 @@ body.playing #biome { display: block; }
 .overlay {
   position: absolute;
   inset: 0;
-  background: rgba(15, 15, 30, 0.94);
+  background: rgba(10, 13, 20, 0.92);
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -166,10 +186,11 @@ body.playing #biome { display: block; }
   display: none;
 }
 
+h1, h2 { font-family: var(--font-display); font-weight: 800; letter-spacing: 0.4px; }
 .overlay h1 {
   font-size: 36px;
   margin-bottom: 16px;
-  color: #ffd166;
+  color: var(--accent);
 }
 
 .overlay p {
@@ -184,36 +205,50 @@ body.playing #biome { display: block; }
 
 button {
   margin-top: 16px;
-  padding: 12px 28px;
-  font-size: 18px;
-  font-weight: bold;
-  color: #1a1a2e;
-  background: #ffd166;
-  border: none;
-  border-radius: 6px;
+  padding: 13px 30px;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: #04141b;
+  background: linear-gradient(180deg, #5eeaff, var(--accent-deep));
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 12px;
   cursor: pointer;
-  transition: transform 0.1s, background 0.2s;
+  box-shadow: 0 6px 22px rgba(56, 225, 255, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  transition: transform 0.12s ease, box-shadow 0.2s ease, background 0.2s ease, border-color 0.2s ease;
 }
 
 button:hover {
-  background: #ffe08a;
+  background: linear-gradient(180deg, #74efff, #34d2f2);
+  box-shadow: 0 10px 30px rgba(56, 225, 255, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  transform: translateY(-1px);
 }
 
 button:active {
-  transform: scale(0.96);
+  transform: translateY(0) scale(0.97);
 }
 
+/* Secondary / ghost: frosted glass with a hairline that lights up cyan */
 button.alt {
-  background: transparent;
-  color: #ffd166;
-  border: 2px solid #ffd166;
+  background: var(--glass);
+  color: var(--text);
+  border: 1px solid var(--hairline);
+  box-shadow: none;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 button.alt:hover {
-  background: rgba(255, 209, 102, 0.15);
+  background: var(--glass-strong);
+  border-color: var(--accent-line);
+  color: #fff;
+  box-shadow: 0 0 0 1px var(--accent-soft), 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 .bank {
@@ -233,26 +268,32 @@ button:disabled {
   gap: 4px;
   margin-top: 14px;
   padding: 4px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 209, 102, 0.35);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--hairline);
   border-radius: 999px;
 }
 .mode-toggle .mode-opt {
   margin: 0;
-  padding: 7px 18px;
-  font-size: 14px;
-  font-weight: bold;
-  color: #cdd3df;
+  padding: 7px 16px;
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-dim);
   background: transparent;
   border: none;
+  box-shadow: none;
   border-radius: 999px;
 }
 .mode-toggle .mode-opt:hover {
-  background: rgba(255, 209, 102, 0.12);
+  background: var(--accent-soft);
+  color: var(--text);
+  transform: none;
+  box-shadow: none;
 }
 .mode-toggle .mode-opt.on {
-  color: #1a1a2e;
-  background: #ffd166;
+  color: #04141b;
+  background: linear-gradient(180deg, #5eeaff, var(--accent-deep));
+  box-shadow: 0 2px 10px rgba(56, 225, 255, 0.35);
 }
 
 /* ---- Settings panel ---- */
@@ -297,7 +338,7 @@ button:disabled {
 }
 #garage h2 {
   font-size: 26px;
-  color: #ffd166;
+  color: var(--accent);
   margin-bottom: 14px;
 }
 #garage h2 .bank {
@@ -399,15 +440,19 @@ button:disabled {
   margin: 10px auto 0;
 }
 .locked-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   opacity: 0.6;
   font-size: 12px;
   margin: 10px 0;
 }
+.locked-note .ico { width: 13px; height: 13px; }
 .showroom-actions {
   margin-top: 12px;
 }
 .showroom-actions .tag.sel {
-  font-size: 18px;
+  font-size: 14px;
 }
 
 /* ---- Per-car upgrades ---- */
@@ -447,7 +492,7 @@ button:disabled {
   background: rgba(255, 255, 255, 0.15);
 }
 .pip.on {
-  background: #ffd166;
+  background: var(--accent);
 }
 .upg-btn {
   margin: 0;
@@ -473,54 +518,48 @@ button:disabled {
   font-size: 14px;
 }
 .tag.sel {
-  color: #06d6a0;
-  font-weight: bold;
-  font-size: 14px;
+  display: inline-block;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.4px;
+  padding: 7px 16px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
 }
 
 /* ---- Mute button ---- */
-#mute {
+#mute, #pause-btn {
   position: absolute;
   bottom: 14px;
-  left: 14px;
   margin: 0;
   width: 46px;
   height: 46px;
   padding: 0;
-  font-size: 20px;
-  line-height: 46px;
-  background: rgba(255, 255, 255, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 16, 24, 0.5);
   color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 50%;
+  box-shadow: none;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   z-index: 6;
   -webkit-tap-highlight-color: transparent;
 }
-
-#mute:hover {
-  background: rgba(255, 255, 255, 0.24);
+#mute { left: 14px; }
+#pause-btn { left: 70px; display: none; /* only while a run is active */ }
+#mute svg, #pause-btn svg { width: 20px; height: 20px; }
+#mute:hover, #pause-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: var(--accent-line);
+  box-shadow: none;
+  transform: none;
 }
-
-#pause-btn {
-  position: absolute;
-  bottom: 14px;
-  left: 70px;
-  margin: 0;
-  width: 46px;
-  height: 46px;
-  padding: 0;
-  font-size: 18px;
-  line-height: 46px;
-  background: rgba(255, 255, 255, 0.14);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 50%;
-  z-index: 6;
-  display: none; /* only while a run is active */
-  -webkit-tap-highlight-color: transparent;
-}
-body.playing #pause-btn { display: block; }
-#pause-btn:hover { background: rgba(255, 255, 255, 0.24); }
+body.playing #pause-btn { display: flex; }
 
 /* ---- Pause overlay ---- */
 #pause {
@@ -542,7 +581,7 @@ body.playing #pause-btn { display: block; }
   margin: 0 0 18px;
   font-size: 26px;
   letter-spacing: 2px;
-  color: #ffd166;
+  color: var(--accent);
 }
 .pause-btns {
   display: flex;
@@ -672,6 +711,17 @@ body.touch.playing #mute { left: 50%; bottom: 16px; transform: translateX(6px); 
   display: block;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
 }
+/* Generic thin-line icons inherit text color + sit on the text baseline. */
+.ico {
+  width: 1.05em;
+  height: 1.05em;
+  vertical-align: -0.18em;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.best { display: inline-flex; align-items: center; gap: 5px; }
+.best .ico { color: var(--accent); width: 16px; height: 16px; opacity: 0.95; }
+.badge-ico { width: 13px; height: 13px; vertical-align: -2px; margin-right: 2px; }
 .cred-num {
   font-weight: 800;
   color: #ffe9a8;
@@ -741,7 +791,13 @@ body.touch.playing #mute { left: 50%; bottom: 16px; transform: translateX(6px); 
   background: linear-gradient(180deg, #ffe08a, #ffcf4d);
   color: #3a2a00;
   font-weight: 800;
-  box-shadow: 0 4px 14px rgba(255, 209, 102, 0.35);
+  border-color: rgba(255, 240, 200, 0.5);
+  box-shadow: 0 4px 16px rgba(255, 209, 102, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+.car-btn.buy:hover,
+.env-btn.buy:hover {
+  background: linear-gradient(180deg, #ffe9a4, #ffd866);
+  box-shadow: 0 8px 24px rgba(255, 209, 102, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.55);
 }
 .car-btn.buy .cred-ico,
 .env-btn.buy .cred-ico { width: 14px; height: 14px; }
@@ -762,9 +818,11 @@ body.touch.playing #mute { left: 50%; bottom: 16px; transform: translateX(6px); 
 .env-ico {
   position: absolute;
   left: 50%;
-  bottom: 14%;
+  bottom: 15%;
   transform: translateX(-50%);
-  font-size: 64px;
+  width: 78px;
+  height: 78px;
+  color: rgba(255, 255, 255, 0.94);
   filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.5));
 }
 #env-info {
@@ -793,13 +851,17 @@ body.touch.playing #mute { left: 50%; bottom: 16px; transform: translateX(6px); 
   background: radial-gradient(ellipse 72% 64% at 50% 58%, color-mix(in srgb, var(--accent, #06d6a0) 38%, transparent), rgba(8, 8, 16, 0) 74%);
 }
 .showroom.locked::after {
-  content: "🔒";
+  content: "";
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  font-size: 42px;
-  opacity: 0.85;
+  width: 46px;
+  height: 46px;
+  /* Inline lock glyph (matches the #ico-lock symbol), tinted white */
+  background: no-repeat center / contain
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='5' y='11' width='14' height='9' rx='2'/%3E%3Cpath d='M8 11V8a4 4 0 0 1 8 0v3'/%3E%3C/svg%3E");
+  opacity: 0.92;
   filter: drop-shadow(0 3px 12px rgba(0, 0, 0, 0.6));
   pointer-events: none;
 }
@@ -867,7 +929,10 @@ body.touch.playing #mute { left: 50%; bottom: 16px; transform: translateX(6px); 
   margin-bottom: 12px;
   text-shadow: 0 4px 22px rgba(0, 0, 0, 0.65);
 }
-#overlay .home-logo span { color: #ffd166; }
+#overlay .home-logo span {
+  color: var(--accent);
+  text-shadow: 0 0 22px rgba(56, 225, 255, 0.55);
+}
 #overlay .home-stats {
   display: flex;
   gap: 8px;
@@ -1045,7 +1110,7 @@ body.touch.playing #mute { left: 50%; bottom: 16px; transform: translateX(6px); 
 #results .results-title {
   margin: 16px 0 14px;
   font-size: 24px;
-  color: #ffd166;
+  color: var(--accent);
 }
 .results-grid {
   display: grid;

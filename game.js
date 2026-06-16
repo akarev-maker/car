@@ -703,7 +703,7 @@ function toggleMute() {
   muted = !muted;
   if (audio) audio.master.gain.setTargetAtTime(muted ? 0 : 0.9, audio.ac.currentTime, 0.02);
   const btn = document.getElementById("mute");
-  if (btn) btn.textContent = muted ? "🔇" : "🔊";
+  if (btn) btn.innerHTML = ico(muted ? "ico-vol-off" : "ico-vol-on");
   saveProgress();
 }
 
@@ -2105,6 +2105,8 @@ function celebrateBest() {
 let lastEarned = 0;  // credits granted by the most recent run (shown on results)
 let goalsJustDone = []; // daily/weekly goals completed by the most recent run (shown on results)
 const CRED_ICO = '<svg class="cred-ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#cred-coin"/></svg>';
+// Inline thin-line icon by symbol id (see index.html defs); inherits text color.
+const ico = (id, cls = "ico") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true"><use href="#${id}"/></svg>`;
 const fmt = (n) => Math.round(n).toLocaleString();
 const credCost = (n) => `<span class="cred">${CRED_ICO}<span class="cred-num">${fmt(n)}</span></span>`;
 const walletPill = (id) =>
@@ -2182,7 +2184,7 @@ function showMenu() {
   overlay.innerHTML = `
     <div class="home-top">
       <h1 class="home-logo">TRAFFIC <span>RACER</span></h1>
-      <p class="home-stats">${walletPill("menu-credits")} &nbsp;·&nbsp; <span class="best">🏆 ${fmt(highScore)}</span> &nbsp;·&nbsp; <span class="best">🚗 ${owned.length}/${CARS.length}</span></p>
+      <p class="home-stats">${walletPill("menu-credits")} &nbsp;·&nbsp; <span class="best">${ico("ico-trophy")} ${fmt(highScore)}</span> &nbsp;·&nbsp; <span class="best">${ico("ico-car")} ${owned.length}/${CARS.length}</span></p>
       ${goalsPanelHTML()}
     </div>
     <div class="home-bottom">
@@ -2463,7 +2465,7 @@ function refreshShowroom() {
 
   const upg = isOwned
     ? `<div class="upgrades">${UPG_TRACKS.map((t) => upgradeRowHTML(c, t)).join("")}</div>`
-    : `<p class="locked-note">🔒 Purchase to unlock tuning.</p>`;
+    : `<p class="locked-note">${ico("ico-lock")} Purchase to unlock tuning.</p>`;
 
   // Stage dressing reacts to tier; accent colour flows into CSS.
   const sr = document.querySelector(".showroom");
@@ -2544,10 +2546,10 @@ const hexColor = (n) => "#" + (n >>> 0).toString(16).padStart(6, "0");
 // Sky -> ground gradient swatch with a scape icon, previewing an env at a glance.
 function envDiorama(env) {
   const p = env.day || env.night;   // headline look (day if it has one, else night)
-  const ico = { plains: "🌳", desert: "🌵", city: "🏙️", neon: "🌆" }[env.scape] || "🛣️";
+  const glyph = { plains: "ico-leaf", desert: "ico-cactus", city: "ico-building", neon: "ico-spark" }[env.scape] || "ico-leaf";
   return `<div class="env-diorama" style="background:linear-gradient(180deg,
       ${hexColor(p.sky)} 0%, ${hexColor(p.sky)} 56%, ${hexColor(p.grass)} 57%, ${hexColor(p.grass)} 100%)">
-      <span class="env-ico">${ico}</span>
+      ${ico(glyph, "env-ico")}
     </div>`;
 }
 
@@ -2597,10 +2599,11 @@ function refreshEnv() {
   else if (isOwned) action = `<button class="alt env-btn" data-env="${e.id}">Drive here</button>`;
   else action = `<button class="env-btn buy" data-env="${e.id}" ${bank < e.price ? "disabled" : ""}>Unlock ${credCost(e.price)}</button>`;
 
-  const timeBadge = e.nightOnly ? "🌙 Night only"
-    : e.dayOnly ? "☀️ Day only"
-    : e.startNight ? "🌙 → ☀️ Day & night · opens at night"
-    : "☀️ → 🌙 Day & night";
+  const sun = ico("ico-sun", "badge-ico"), moon = ico("ico-moon", "badge-ico");
+  const timeBadge = e.nightOnly ? `${moon} Night only`
+    : e.dayOnly ? `${sun} Day only`
+    : e.startNight ? `${moon} Day &amp; night · opens at night`
+    : `${sun} Day &amp; night`;
 
   const sr = document.querySelector(".env-showroom");
   if (sr) { sr.className = `showroom env-showroom${isOwned ? "" : " locked"}`; sr.style.setProperty("--accent", accent); }
@@ -2613,7 +2616,7 @@ function refreshEnv() {
     </div>
     <div class="car-title" style="color:${accent}">${e.name}</div>
     <p class="car-blurb">${e.blurb}</p>
-    ${isOwned ? "" : `<p class="locked-note">🔒 Unlock to drive in this world.</p>`}
+    ${isOwned ? "" : `<p class="locked-note">${ico("ico-lock")} Unlock to drive in this world.</p>`}
     <div class="showroom-actions">${action}</div>
   `;
   document.getElementById("env-info").querySelectorAll(".env-btn").forEach((btn) =>
@@ -2642,6 +2645,7 @@ function handleEnvClick(id) {
   refreshEnv();
 }
 
+document.getElementById("mute").innerHTML = ico(muted ? "ico-vol-off" : "ico-vol-on");
 document.getElementById("mute").addEventListener("click", toggleMute);
 document.getElementById("pause-btn").addEventListener("click", togglePause);
 loadProgress();
