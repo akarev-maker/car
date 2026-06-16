@@ -871,6 +871,41 @@ body.touch .joystick {
 .goal.done .goal-bar i { background: #5ef0b0; }
 .goal-prog { font-size: 10px; opacity: 0.6; }
 
+/* ---- Toasts (mid-run notifications) ---- */
+#toasts {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  z-index: 12;
+  pointer-events: none;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 90vw;
+  background: rgba(8, 10, 18, 0.9);
+  border: 1px solid rgba(255, 209, 102, 0.5);
+  border-radius: 12px;
+  padding: 8px 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  animation: toast-in 0.4s cubic-bezier(0.2, 0.9, 0.2, 1);
+}
+.toast.out { animation: toast-out 0.4s ease forwards; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-14px) scale(0.95); } to { opacity: 1; transform: none; } }
+@keyframes toast-out { to { opacity: 0; transform: translateY(-10px); } }
+.toast-ico { font-size: 18px; font-weight: 900; color: #5ef0b0; }
+.toast-body { display: flex; flex-direction: column; line-height: 1.25; text-align: left; }
+.toast-body b { font-size: 13px; color: #ffd166; }
+.toast-body span { font-size: 11px; opacity: 0.85; }
+.toast-rew { display: inline-flex; align-items: center; gap: 3px; font-weight: 800; font-size: 13px; color: #ffd166; }
+.toast-rew .cred-ico { width: 13px; height: 13px; }
+
 /* completed-goal lines on the results card */
 .results-goals {
   margin: -4px 0 14px;

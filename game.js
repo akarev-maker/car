@@ -249,6 +249,37 @@ function ensureGoals() {
   if (!goals || goals.date !== today || !Array.isArray(goals.items)) goals = genGoals(today);
 }
 
+// Live snapshot of where the current run sits against a goal (committed progress
+// from earlier runs + this run so far). "sum" goals add the run; "max" goals take
+// whichever is bigger. earned is projected from the score at the current rate.
+function goalLiveValue(it, t) {
+  const runVal = t.stat({
+    distKm: state.position / DIST_DIV,
+    score: state.score,
+    passed: state.passed,
+    maxCombo: state.maxCombo,
+    earned: Math.round(state.score * CREDIT_RATE),
+  }) || 0;
+  return t.mode === "sum" ? it.progress + runVal : Math.max(it.progress, runVal);
+}
+
+// During a run, fire a toast + reward the instant a goal is met. endRun's
+// trackGoals skips done goals, so nothing is credited or committed twice.
+function checkGoalsLive() {
+  if (!goals) return;
+  for (const it of goals.items) {
+    if (it.done) continue;
+    const t = goalTmpl(it.id);
+    if (t && goalLiveValue(it, t) >= it.target) {
+      it.done = true;
+      it.progress = it.target;
+      bank += it.reward;
+      saveProgress();
+      goalToast(it);
+    }
+  }
+}
+
 // Roll a finished run's stats into today's goals; returns the goals just completed.
 function trackGoals() {
   ensureGoals();
@@ -269,6 +300,28 @@ function trackGoals() {
     if (it.progress >= it.target) { it.done = true; bank += it.reward; done.push(it); }
   }
   return done;
+}
+
+// ---- Toasts ----
+// Transient top-center cards (e.g. a goal completing mid-run). Auto-dismiss.
+function showToast(inner, cls = "") {
+  const wrap = document.getElementById("toasts");
+  if (!wrap) return;
+  const el = document.createElement("div");
+  el.className = "toast " + cls;
+  el.innerHTML = inner;
+  wrap.appendChild(el);
+  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 400); }, 2600);
+}
+function goalToast(it) {
+  const t = goalTmpl(it.id);
+  showToast(
+    `<span class="toast-ico">✓</span>` +
+    `<div class="toast-body"><b>Goal complete</b><span>${t.fmt(it.target)}</span></div>` +
+    `<span class="toast-rew">${CRED_ICO}${it.reward}</span>`,
+    "goal"
+  );
+  audioUnlock();
 }
 
 // ---- State ----
@@ -932,6 +985,7 @@ function update() {
   state.flash *= 0.9;
   state.hitFlash *= 0.88;
   state.shake *= 0.85;
+  checkGoalsLive(); // celebrate the moment a daily goal is met, mid-run
   // NOTE: HUD + engine audio are presentation, not physics. They run once per
   // rendered frame from loop(), never inside this (possibly multi-step) update.
 }
