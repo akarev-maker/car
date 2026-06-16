@@ -486,6 +486,7 @@ window.addEventListener("keydown", (e) => {
     case "ArrowUp": case "w": case "W": keys.up = true; break;
     case "ArrowDown": case "s": case "S": keys.down = true; break;
     case "m": case "M": toggleMute(); break;
+    case "f": case "F": toggleFps(); break; // perf overlay (fps / frame time / draw calls)
     case "Escape": if (state.running) quitRun(); break; // stop driving -> home
   }
 });
@@ -1428,7 +1429,50 @@ function loop(now) {
     audioEngine(state.speed, state.maxSpeed, input.throttle, true);
   }
   if (state.running) render();
+  fpsMeter();
   requestAnimationFrame(loop);
+}
+
+// ---- Perf meter (toggle with F) ----
+// Shows live fps, average frame time, and the renderer's draw-call + triangle
+// counts for the last frame — enough to tell GPU fill-rate from CPU/draw-call
+// bottlenecks at a glance. State persists across reloads so it's there when you
+// reopen to diagnose. Updates 4x/sec so the numbers are readable.
+let fpsOn = localStorage.getItem("fps") === "1";
+let _fpsEl = null, _fpsFrames = 0, _fpsLast = 0;
+function toggleFps() {
+  fpsOn = !fpsOn;
+  localStorage.setItem("fps", fpsOn ? "1" : "0");
+  _fpsFrames = 0; _fpsLast = 0;
+}
+function fpsMeter() {
+  if (!fpsOn) { if (_fpsEl) _fpsEl.style.display = "none"; return; }
+  if (!_fpsEl) {
+    _fpsEl = document.createElement("div");
+    Object.assign(_fpsEl.style, {
+      position: "fixed", top: "8px", left: "8px", zIndex: "9999",
+      font: "12px/1.4 ui-monospace, Menlo, Consolas, monospace",
+      color: "#9effa8", background: "rgba(0,0,0,0.55)",
+      padding: "3px 7px", borderRadius: "6px",
+      pointerEvents: "none", whiteSpace: "nowrap", letterSpacing: "0.3px",
+    });
+    document.body.appendChild(_fpsEl);
+  }
+  _fpsEl.style.display = "block";
+  const now = performance.now();
+  if (!_fpsLast) _fpsLast = now;
+  _fpsFrames++;
+  const dt = now - _fpsLast;
+  if (dt >= 250) {
+    const fps = Math.round((_fpsFrames * 1000) / dt);
+    const ms = (dt / _fpsFrames).toFixed(1);
+    const r = renderer ? renderer.info.render : null;
+    const calls = r ? r.calls : 0;
+    const tris = r ? Math.round(r.triangles / 1000) : 0;
+    _fpsEl.textContent = `${fps} fps · ${ms} ms · ${calls} calls · ${tris}k tris`;
+    _fpsEl.style.color = fps >= 50 ? "#9effa8" : fps >= 30 ? "#ffd166" : "#ff6b6b";
+    _fpsFrames = 0; _fpsLast = now;
+  }
 }
 
 // Idle "hero" loop for the home screen: the road drifts and the selected car
@@ -1451,6 +1495,7 @@ function idleLoop() {
   state.speed = 0;
   updateScenery();
   render();
+  fpsMeter();
   idleRAF = requestAnimationFrame(idleLoop);
 }
 
