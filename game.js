@@ -17,6 +17,7 @@ const SPAWN_DZ = 4800;   // how far ahead (game-z units) traffic appears
 const ROAD_HALF_W = 9;   // world half-width of the asphalt (lx = ±1)
 const ROAD_LEN = 660;    // world length of the road / ground meshes
 const Z_SCALE = 0.055;   // world units per game-z unit (depth compression)
+const ROAD_REPEAT = 50;  // lane-dash cycles down the road (lower = more spaced-out dashes)
 const PLAYER_DZ = 138;   // game-z plane where you sit; passes/crashes register here
 
 // game coords -> Three world coords
@@ -32,7 +33,7 @@ const SCENERY_STEP = 280; // average spacing between roadside objects (world uni
 // ---- Driving feel ----
 const ACCEL = 1.3;
 const ENGINE_BRAKE = 0.5;
-const BRAKE = 2.6;
+const BRAKE_BASE = 0.9; // brake decel per unit of a car's brake spec — better cars stop harder (see effStats)
 const DRAG = 0.0015; // light; the accel taper is what sets top speed now
 const STEER_ACCEL = 0.0048;
 const STEER_FRICTION = 0.84;
@@ -70,22 +71,22 @@ const VEHICLES = {
 // ---- Cars you can unlock (the first one is intentionally weak) ----
 // engine = { idle, rev: firing-rate range (Hz); growl: distortion; bass: sub level; bright: filter }
 const CARS = [
-  { id: "hatch", name: "City Hatch", color: "#9aa0a6", price: 0, accel: 0.42, maxSpeed: 46, handling: 0.8,
+  { id: "hatch", name: "City Hatch", color: "#9aa0a6", price: 0, accel: 0.42, maxSpeed: 46, handling: 0.8, brake: 0.75,
     tier: 0, rarity: "Standard", blurb: "Humble runabout — gentle pace, easy to place in traffic.",
     engine: { idle: 50, rev: 190, growl: 1.6, bass: 0.3, bright: 1.05 } },
-  { id: "sedan", name: "Sport Sedan", color: "#3aa0ff", price: 2500, accel: 0.58, maxSpeed: 60, handling: 1.0,
+  { id: "sedan", name: "Sport Sedan", color: "#3aa0ff", price: 2500, accel: 0.58, maxSpeed: 60, handling: 1.0, brake: 1.0,
     tier: 1, rarity: "Sport", blurb: "Balanced all-rounder with a willing, eager engine.",
     engine: { idle: 44, rev: 175, growl: 2.2, bass: 0.5, bright: 1.0 } },
-  { id: "muscle", name: "Muscle", color: "#ef476f", price: 7000, accel: 0.78, maxSpeed: 72, handling: 1.08,
+  { id: "muscle", name: "Muscle", color: "#ef476f", price: 7000, accel: 0.78, maxSpeed: 72, handling: 1.08, brake: 1.25,
     tier: 2, rarity: "Muscle", blurb: "Brutal low-end shove — thrilling, a handful up top.",
     engine: { idle: 34, rev: 150, growl: 3.4, bass: 0.85, bright: 0.95 } },
-  { id: "gt", name: "GT Coupe", color: "#ffd166", price: 16000, accel: 0.95, maxSpeed: 84, handling: 1.22,
+  { id: "gt", name: "GT Coupe", color: "#ffd166", price: 16000, accel: 0.95, maxSpeed: 84, handling: 1.22, brake: 1.35,
     tier: 3, rarity: "GT", blurb: "Poised grand tourer — quick, composed, effortless.",
     engine: { idle: 46, rev: 200, growl: 2.8, bass: 0.6, bright: 1.2 } },
-  { id: "super", name: "Hypercar", color: "#06d6a0", price: 35000, accel: 1.2, maxSpeed: 100, handling: 1.45,
+  { id: "super", name: "Hypercar", color: "#06d6a0", price: 35000, accel: 1.2, maxSpeed: 100, handling: 1.45, brake: 1.6,
     tier: 4, rarity: "Hyper", blurb: "Savage pace and razor reflexes for the brave.",
     engine: { idle: 38, rev: 220, growl: 3.6, bass: 0.95, bright: 1.3 } },
-  { id: "velox", name: "Velox SVX", color: "#eceff5", price: 90000, accel: 1.5, maxSpeed: 120, handling: 1.6,
+  { id: "velox", name: "Velox SVX", color: "#eceff5", price: 90000, accel: 1.5, maxSpeed: 120, handling: 1.6, brake: 1.8,
     tier: 5, rarity: "Apex", blurb: "The halo car. Effortless violence, dressed in elegance.",
     engine: { idle: 40, rev: 240, growl: 3.2, bass: 1.0, bright: 1.4 } },
 ];
@@ -106,6 +107,7 @@ const STAT_CEIL = {
   maxSpeed: Math.max(...CARS.map((c) => c.maxSpeed)) * (1 + 0.08 * UPG_MAX),
   handling: Math.max(...CARS.map((c) => c.handling)) * (1 + 0.08 * UPG_MAX),
 };
+STAT_CEIL.braking = BRAKE_BASE * Math.max(...CARS.map((c) => c.brake)) * (1 + 0.08 * UPG_MAX);
 // Rarity accent per tier (clean -> rich as cars improve).
 const RARITY_COLOR = ["#9aa0a6", "#3aa0ff", "#ef476f", "#ffd166", "#06d6a0", "#e8d8a0"];
 
@@ -117,10 +119,13 @@ const defaultUpgrades = () => {
 // A car's stats with its upgrades applied (used in the garage and in play).
 function effStats(c) {
   const u = upgrades[c.id] || { engine: 0, speed: 0, handling: 0 };
+  const handling = c.handling * (1 + 0.08 * u.handling);
   return {
     accel: c.accel * (1 + 0.12 * u.engine),
     maxSpeed: c.maxSpeed * (1 + 0.08 * u.speed),
-    handling: c.handling * (1 + 0.08 * u.handling),
+    handling,
+    // Brakes come from the car's own brake spec; the handling upgrade also sharpens them.
+    braking: BRAKE_BASE * c.brake * (1 + 0.08 * u.handling),
   };
 }
 
@@ -743,7 +748,7 @@ function update() {
     const accelFade = Math.max(0.2, 1 - Math.pow(state.speed / state.maxSpeed, 2));
     state.speed += activeStats.accel * input.throttle * accelFade;
   } else state.speed -= ENGINE_BRAKE;
-  if (input.brake > 0) state.speed -= BRAKE * input.brake;
+  if (input.brake > 0) state.speed -= activeStats.braking * input.brake;
   state.speed -= state.speed * DRAG;
   state.speed = clamp(state.speed, 0, state.maxSpeed);
   state.position += state.speed;
@@ -1117,7 +1122,7 @@ function makeRoadTexture(twoway) {
   x.fillRect(4, 0, 7, 256); x.fillRect(256 - 11, 0, 7, 256);
   for (const u of [0.2, 0.4, 0.6, 0.8]) { // dashed lane boundaries
     x.fillStyle = "#f0f0f0";
-    x.fillRect(u * 256 - 3, 0, 6, 150); // dash (top) + gap (bottom) tiles into dashes
+    x.fillRect(u * 256 - 3, 0, 6, 90); // dash (top) + longer gap (bottom) tiles into dashes
   }
   if (twoway) { // solid double-yellow centerline: everything left of it is oncoming
     x.fillStyle = "#e7b531";
@@ -1129,7 +1134,7 @@ function makeRoadTexture(twoway) {
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = THREE.ClampToEdgeWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(1, 70);
+  tex.repeat.set(1, ROAD_REPEAT);
   tex.anisotropy = 8;
   return tex;
 }
@@ -1333,7 +1338,7 @@ function render() {
   if (!ready3d) return;
 
   applyBiome(state.position / DIST_DIV);
-  roadTex.offset.y = -(state.position * Z_SCALE) * (70 / ROAD_LEN); // scroll markings
+  roadTex.offset.y = -(state.position * Z_SCALE) * (ROAD_REPEAT / ROAD_LEN); // scroll markings
 
   _blinkOn = Math.floor(performance.now() / 280) % 2 === 0; // ~1.8 Hz signal flash
   reconcile(trafficGroup, traffic, buildVehicle, placeTraffic);
@@ -1699,6 +1704,7 @@ function statBars(c) {
   };
   return bar("ACC", s.accel, STAT_CEIL.accel, r10(s.accel, STAT_CEIL.accel))
     + bar("SPD", s.maxSpeed, STAT_CEIL.maxSpeed, spd(s.maxSpeed) + " " + spdLabel())
+    + bar("BRK", s.braking, STAT_CEIL.braking, r10(s.braking, STAT_CEIL.braking))
     + bar("HND", s.handling, STAT_CEIL.handling, r10(s.handling, STAT_CEIL.handling));
 }
 
