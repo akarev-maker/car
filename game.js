@@ -12,7 +12,7 @@ const canvas = document.getElementById("game");
 // ---- World layout (real 3D, Three.js) ----
 // 4 lanes across the carriageway (±1 = road edges); split into your direction
 // and oncoming further down (see FWD_LANES / ONC_LANES).
-const START_LANE = 0.4; // you begin in an inner lane, clear of oncoming traffic
+const START_LANE = 0.25; // you begin in an inner lane, clear of oncoming traffic
 const SPAWN_DZ = 4800;   // how far ahead (game-z units) traffic appears
 const ROAD_HALF_W = 9;   // world half-width of the asphalt (lx = ±1)
 const ROAD_LEN = 660;    // world length of the road / ground meshes
@@ -53,11 +53,15 @@ const TRAFFIC_GAP = 700; // min world gap between cars in a lane (they queue, no
 // Two-way: the carriageway splits down the middle — you drive the right lanes,
 // the left lanes carry oncoming traffic. Dipping left for a near miss pays big.
 const ONEWAY_LANES = [-0.8, -0.4, 0, 0.4, 0.8]; // sorted left -> right, center filled
-const FWD_LANES = [0.4, 0.8];    // two-way: your direction (right side)
-const ONC_LANES = [-0.4, -0.8];  // two-way: oncoming (left side)
+// Two-way: no middle slot. Each side's two lanes fill its half of the
+// carriageway (quarter-points), so the inner lanes butt against the centerline.
+// Parking on the line now sits inside the sideswipe band of every inner-lane car
+// instead of a safe near-miss gap — no more free combo-farming down the middle.
+const FWD_LANES = [0.25, 0.75];    // two-way: your direction (right side)
+const ONC_LANES = [-0.25, -0.75];  // two-way: oncoming (left side)
 const ONCOMING_BONUS = 1.8;      // near-miss score multiplier vs oncoming traffic
-const LANE_CHANGE_RATE = 0.013;  // how fast a weaving car slides between its lanes
-const SIGNAL_FRAMES = 55;        // blinker flashes this long before the merge starts
+const LANE_CHANGE_RATE = 0.007;  // how fast a weaving car slides between its lanes (lower = gentler, more readable merge)
+const SIGNAL_FRAMES = 95;        // blinker flashes this long before the merge starts (longer = more warning)
 // Per-kind traffic: heavies are slower and a touch wider. halfW is added to the
 // contact tolerances, so it MUST stay well under the 0.4 lane spacing or a heavy
 // in the next lane over would falsely register contact (it's only the extra
@@ -848,7 +852,7 @@ function updateLaneChange(car) {
   if (--car.changeCD <= 0) {
     car.changeCD = 120 + Math.floor(Math.random() * 180);
     const dz = car.z - state.position;
-    const lead = car.dir < 0 ? 1100 : 650; // extra lead now that signaling costs time
+    const lead = car.dir < 0 ? 1600 : 950; // extra lead so the longer signal + slower glide still finishes well ahead
     const dest = adjacentLane(car.lane, laneGroupOf(car));
     if (dz > lead && dest !== car.lane && laneClearForMerge(car, dest) && Math.random() < 0.5) {
       car.targetLane = dest;
@@ -1280,7 +1284,10 @@ function makeRoadTexture(twoway) {
   }
   x.fillStyle = "#e8e8e8"; // solid edge lines (lx = ±1 -> u 0 / 1)
   x.fillRect(4, 0, 7, 256); x.fillRect(256 - 11, 0, 7, 256);
-  for (const u of [0.2, 0.4, 0.6, 0.8]) { // dashed lane boundaries
+  // Dashed lane boundaries. One-way splits into five lanes (incl. the center);
+  // two-way has two lanes per side, so the only dashes are mid-way through each
+  // half (u 0.25 / 0.75), with the double-yellow centerline between them.
+  for (const u of twoway ? [0.25, 0.75] : [0.2, 0.4, 0.6, 0.8]) {
     x.fillStyle = "#f0f0f0";
     x.fillRect(u * 256 - 3, 0, 6, 90); // dash (top) + longer gap (bottom) tiles into dashes
   }
