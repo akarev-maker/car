@@ -135,6 +135,8 @@ let owned = ["hatch"];
 let selectedCar = "hatch";
 let trafficMode = "twoway"; // "oneway" (all lanes your way) | "twoway" (oncoming half)
 let speedUnit = "kmh";      // "kmh" | "mph" — display only; internal units unchanged
+let quality = "high";       // "high" | "low" — Low caps the render resolution for slow GPUs
+const QUALITY_DPR = { high: 1.5, low: 1.0 }; // pixel-ratio cap per quality (fill-rate lever)
 let highScore = 0;
 
 // Internal speed -> display number. 1 internal unit = 3 km/h; mph = km/h × 0.621371.
@@ -152,6 +154,7 @@ function loadProgress() {
     selectedCar = localStorage.getItem("tr_selected") || "hatch";
     trafficMode = localStorage.getItem("tr_mode") === "oneway" ? "oneway" : "twoway";
     speedUnit = localStorage.getItem("tr_unit") === "mph" ? "mph" : "kmh";
+    quality = localStorage.getItem("tr_quality") === "low" ? "low" : "high";
     muted = localStorage.getItem("tr_muted") === "1";
     highScore = parseInt(localStorage.getItem("tr_hi")) || 0;
     upgrades = JSON.parse(localStorage.getItem("tr_upg")) || {};
@@ -173,6 +176,7 @@ function saveProgress() {
     localStorage.setItem("tr_selected", selectedCar);
     localStorage.setItem("tr_mode", trafficMode);
     localStorage.setItem("tr_unit", speedUnit);
+    localStorage.setItem("tr_quality", quality);
     localStorage.setItem("tr_muted", muted ? "1" : "0");
     localStorage.setItem("tr_hi", highScore);
     localStorage.setItem("tr_upg", JSON.stringify(upgrades));
@@ -1142,9 +1146,9 @@ function makeRoadTexture(twoway) {
 
 function initThree() {
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  // Cap at 1.5x: on Retina/4K (dpr 2) full 2x renders 4x the pixels, which is a
-  // big fill-rate cost for little visible gain here. 1.5 keeps it sharp + smooth.
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  // Render resolution is the main fill-rate lever on Retina/integrated GPUs.
+  // The graphics-quality setting picks the cap (High 1.5x, Low 1.0x).
+  renderer.setPixelRatio(qualityCap());
 
   scene = new THREE.Scene();
   // Sky + fog share one persistent Color that the biome engine recolors in place.
@@ -1709,6 +1713,17 @@ function setTrafficMode(m) {
   applyRoadMode(); // swap the road texture (centerline) to match
 }
 
+// Effective pixel-ratio cap for the current quality (never above the device's).
+function qualityCap() {
+  return Math.min(window.devicePixelRatio || 1, QUALITY_DPR[quality]);
+}
+function setQuality(q) {
+  if (q === quality || !QUALITY_DPR[q]) return;
+  quality = q;
+  if (renderer) { renderer.setPixelRatio(qualityCap()); onResize(); } // apply live
+  saveProgress();
+}
+
 // A simple settings screen rendered into the same overlay as the menu. Each
 // row is a segmented toggle; changes apply live and persist immediately.
 function showSettings() {
@@ -1721,6 +1736,7 @@ function showSettings() {
       <h2>Settings</h2>
       <div class="set-row"><span class="set-label">Speed units</span>${seg("set-unit", "km/h", "mph", speedUnit === "kmh")}</div>
       <div class="set-row"><span class="set-label">Traffic</span>${seg("set-mode", "Two-way", "One-way", trafficMode === "twoway")}</div>
+      <div class="set-row"><span class="set-label">Graphics</span>${seg("set-q", "High", "Low", quality === "high")}</div>
       <div class="set-row"><span class="set-label">Sound</span>${seg("set-snd", "On", "Off", !muted)}</div>
       <button id="settings-back">Back</button>
     </div>
@@ -1732,6 +1748,8 @@ function showSettings() {
   document.getElementById("set-unit-b").addEventListener("click", () => { speedUnit = "mph"; reopen(); });
   document.getElementById("set-mode-a").addEventListener("click", () => { setTrafficMode("twoway"); showSettings(); });
   document.getElementById("set-mode-b").addEventListener("click", () => { setTrafficMode("oneway"); showSettings(); });
+  document.getElementById("set-q-a").addEventListener("click", () => { setQuality("high"); showSettings(); });
+  document.getElementById("set-q-b").addEventListener("click", () => { setQuality("low"); showSettings(); });
   document.getElementById("set-snd-a").addEventListener("click", () => { if (muted) toggleMute(); reopen(); });
   document.getElementById("set-snd-b").addEventListener("click", () => { if (!muted) toggleMute(); reopen(); });
   document.getElementById("settings-back").addEventListener("click", showMenu);
