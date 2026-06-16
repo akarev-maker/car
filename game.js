@@ -413,6 +413,8 @@ const state = {
   kick: 0,          // lateral camera impulse from a near-miss / sideswipe (eases back)
   flashHue: 0,      // 0 = gold near-miss .. 1 = white-hot (rises with combo tier)
   whiteout: 0,      // crash blowout: white flash + crack lines on the impact frame
+  slowmoT: 0,       // ms of bullet-time left after an exceptional pass (real time)
+  slowmoCD: 0,      // ms until another slow-mo can trigger
   // combo + run stats
   combo: 0,
   comboTimer: 0,    // frames remaining before the combo lapses
@@ -424,6 +426,13 @@ const state = {
 
 const COMBO_WINDOW = 150;   // frames (~2.5s) to land the next near-miss
 const comboMult = (combo) => Math.min(8, 1 + Math.floor(combo / 2)); // x1..x8
+
+// Exceptional-pass slow-mo: a *very* close pass at speed briefly bends time.
+// Real-time durations (ms); a cooldown keeps a combo chain from stuttering.
+const SLOWMO_MS = 320;      // how long the dip lasts
+const SLOWMO_CD = 1500;     // minimum gap between slow-mos
+const SLOWMO_SCALE = 0.38;  // time scale at the peak of the dip (0 = frozen)
+const SLOWMO_CLOSE = 0.9;   // closeness above this counts as "exceptional"
 const DIST_DIV = 16000;     // game-units per displayed "km"
 const CREDIT_RATE = 0.125;  // credits earned = score x this (score stays the bragging number)
 
@@ -702,6 +711,18 @@ function audioTick()   { ensureAudio(); uiTone(880, 0, 0.05, "triangle", 0.10); 
 // A short blip on each near-miss; pitch climbs with the combo tier so a long
 // chain rises in a satisfying ladder.
 function audioCombo(mult) { ensureAudio(); const base = 430 + Math.min(mult, 8) * 78; uiTone(base, 0, 0.06, "triangle", 0.05); uiTone(base * 1.5, 0.03, 0.05, "sine", 0.03); }
+// Time-bend swoop when an exceptional pass triggers slow-mo (a quick downward pitch).
+function audioSlowmo() {
+  ensureAudio(); if (!audio) return;
+  const t = audio.ac.currentTime;
+  const o = audio.ac.createOscillator(); o.type = "sine";
+  o.frequency.setValueAtTime(580, t); o.frequency.exponentialRampToValueAtTime(150, t + 0.3);
+  const g = audio.ac.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.09, t + 0.03);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
+  o.connect(g).connect(audio.master); o.start(t); o.stop(t + 0.36);
+}
 function audioCoin()   { ensureAudio(); uiTone(784, 0, 0.08, "triangle", 0.13); uiTone(1175, 0.06, 0.10, "triangle", 0.13); uiTone(1568, 0.12, 0.16, "sine", 0.10); }
 function audioUnlock() { ensureAudio(); [523, 659, 784, 1047, 1319].forEach((f, i) => uiTone(f, i * 0.08, 0.45, "triangle", 0.11)); }
 function audioDenied() { ensureAudio(); uiTone(150, 0, 0.14, "square", 0.08); uiTone(110, 0.07, 0.18, "square", 0.08); }
@@ -1073,12 +1094,18 @@ function update() {
           state.flashHue = clamp((state.mult - 1) / 7, 0, 1);
           state.kick += pan * (0.3 + closeness * 0.7);
           audioCombo(state.mult);
+          // A genuinely close pass at speed bends time for a beat (rate-limited).
+          const exceptional = closeness > SLOWMO_CLOSE && speedFactor > 0.7;
+          if (exceptional && state.slowmoCD <= 0) {
+            state.slowmoT = SLOWMO_MS; state.slowmoCD = SLOWMO_CD;
+            audioSlowmo();
+          }
           if (car.dir < 0 && closeness > 0.4) {
-            addPopup(sp.x, sp.y, "ONCOMING! " + tag, "#ff6b6b", true);
+            addPopup(sp.x, sp.y, (exceptional ? "SO CLOSE! " : "ONCOMING! ") + tag, "#ff6b6b", true);
             state.flash = Math.max(state.flash, Math.max(closeness, 0.6));
             addRing(sp.x, sp.y, closeness, "255,107,107");
           } else if (closeness > 0.6 && speedFactor > 0.6) {
-            addPopup(sp.x, sp.y, "NEAR MISS " + tag, "#ffe07a", true);
+            addPopup(sp.x, sp.y, (exceptional ? "SO CLOSE! " : "NEAR MISS ") + tag, "#ffe07a", true);
             state.flash = Math.max(state.flash, closeness);
             addRing(sp.x, sp.y, closeness, "255,224,122");
           } else {
@@ -1888,6 +1915,15 @@ function drawFx(sf = 0) {
   const spd = clamp((sf - 0.5) / 0.5, 0, 1);   // streaks fade in past half speed
   if (spd > 0.01 && quality === "high") drawSpeedFx(W, H, spd); // skip eye-candy on Low
 
+  if (state.slowmoT > 0) {                      // bullet-time: cyan time-bend vignette
+    const k = state.slowmoT / SLOWMO_MS;
+    const g = fxCtx.createRadialGradient(W / 2, H / 2, H * 0.18, W / 2, H / 2, H * 0.85);
+    g.addColorStop(0, "rgba(56,225,255,0)");
+    g.addColorStop(1, `rgba(56,225,255,${0.24 * k})`);
+    fxCtx.fillStyle = g;
+    fxCtx.fillRect(0, 0, W, H);
+  }
+
   if (state.hitFlash > 0.02) {                 // red impact wash (sideswipe / crash)
     fxCtx.fillStyle = `rgba(255,46,46,${state.hitFlash * 0.4})`;
     fxCtx.fillRect(0, 0, W, H);
@@ -1969,8 +2005,18 @@ function loop(now) {
     requestAnimationFrame(loop); // elapsed time so resume doesn't burst catch-up.
     return;
   }
-  _accum += now - _loopPrev;
+  const dtReal = now - _loopPrev;
   _loopPrev = now;
+  // Exceptional-pass slow-mo: scale how much real time feeds the fixed-step sim,
+  // so fewer physics steps run while the dip is active. Timers run in real time;
+  // the dip snaps in then eases back to normal as it drains.
+  if (state.slowmoCD > 0) state.slowmoCD = Math.max(0, state.slowmoCD - dtReal);
+  let timeScale = 1;
+  if (state.slowmoT > 0) {
+    state.slowmoT = Math.max(0, state.slowmoT - dtReal);
+    timeScale = SLOWMO_SCALE + (1 - SLOWMO_SCALE) * (1 - state.slowmoT / SLOWMO_MS);
+  }
+  _accum += dtReal * timeScale;
   if (_accum > FIXED_DT * MAX_STEPS) _accum = FIXED_DT * MAX_STEPS; // drop backlog
   let steps = 0;
   while (_accum >= FIXED_DT && steps < MAX_STEPS) {
@@ -2099,6 +2145,7 @@ function resetRunState() {
   state.combo = 0; state.comboTimer = 0; state.mult = 1;
   state.maxCombo = 0; state.passed = 0; state.topSpeed = 0;
   state.kick = 0; state.flashHue = 0; state.whiteout = 0;
+  state.slowmoT = 0; state.slowmoCD = 0;
   traffic = [];
   scenery = [];
   popups = [];
