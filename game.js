@@ -138,7 +138,8 @@ let speedUnit = "kmh";      // "kmh" | "mph" — display only; internal units un
 let quality = "high";       // "high" | "low" — Low caps the render resolution for slow GPUs
 const QUALITY_DPR = { high: 1.5, low: 1.0 }; // pixel-ratio cap per quality (fill-rate lever)
 let highScore = 0;
-let goals = null;  // daily goals: { date, items:[{id,target,reward,progress,done}] } — see goals.js section
+let goals = null;  // daily goals:  { date, items:[{id,target,reward,progress,done}] } — see goals section
+let weekly = null; // weekly goals: same shape, keyed by ISO-ish week, bigger targets/rewards
 
 // Internal speed -> display number. 1 internal unit = 3 km/h; mph = km/h × 0.621371.
 const SPEED_UNITS = { kmh: { factor: 3, label: "km/h" }, mph: { factor: 1.864113, label: "mph" } };
@@ -160,8 +161,9 @@ function loadProgress() {
     highScore = parseInt(localStorage.getItem("tr_hi")) || 0;
     upgrades = JSON.parse(localStorage.getItem("tr_upg")) || {};
     goals = JSON.parse(localStorage.getItem("tr_goals")) || null;
+    weekly = JSON.parse(localStorage.getItem("tr_weekly")) || null;
   } catch (e) { /* use defaults */ }
-  ensureGoals(); // (re)generate today's set if missing or stale
+  ensureGoals(); // (re)generate today's / this week's sets if missing or stale
   if (!owned.includes("hatch")) owned.push("hatch");
   if (!owned.includes(selectedCar)) selectedCar = "hatch";
   // Backfill any missing cars/tracks and clamp saved levels.
@@ -184,39 +186,65 @@ function saveProgress() {
     localStorage.setItem("tr_hi", highScore);
     localStorage.setItem("tr_upg", JSON.stringify(upgrades));
     localStorage.setItem("tr_goals", JSON.stringify(goals));
+    localStorage.setItem("tr_weekly", JSON.stringify(weekly));
   } catch (e) { /* ignore */ }
 }
 
-// ---- Daily goals ----
-// Three goals refresh each calendar day, picked deterministically from the date
-// so they're identical across reloads on the same day. Progress rolls in at the
-// end of every run; finishing one credits its reward instantly. "max" goals want
-// a single-run best; "sum" goals accumulate across the whole day.
-const GOAL_POOL = [
+// ---- Daily & weekly goals ----
+// Two sets: dailies (small, refresh each calendar day) and weeklies (a long
+// haul — mostly cumulative totals across many runs, far bigger rewards, refresh
+// each week). Each set is picked deterministically from its period key so it's
+// identical across reloads. Progress rolls in live during a run and at the end
+// of every run; finishing one credits its reward instantly. "max" goals want a
+// single best; "sum" goals accumulate over the period.
+const DAILY_POOL = [
   { id: "dist", mode: "max", stat: (r) => r.distKm,
-    tiers: [[3, 150], [5, 300], [8, 500]],
+    tiers: [[5, 150], [8, 300], [12, 500]],
     fmt: (t) => `Drive ${t} km in a single run`,
     prog: (p, t) => `${Math.min(p, t).toFixed(1)} / ${t} km` },
   { id: "score", mode: "max", stat: (r) => r.score,
-    tiers: [[3000, 150], [6000, 320], [10000, 550]],
+    tiers: [[5000, 150], [9000, 320], [15000, 550]],
     fmt: (t) => `Score ${fmt(t)} in a single run`,
     prog: (p, t) => `${fmt(Math.min(Math.floor(p), t))} / ${fmt(t)}` },
   { id: "passed", mode: "sum", stat: (r) => r.passed,
-    tiers: [[60, 150], [120, 320], [200, 550]],
+    tiers: [[120, 150], [220, 320], [350, 550]],
     fmt: (t) => `Pass ${t} cars today`,
     prog: (p, t) => `${Math.min(Math.floor(p), t)} / ${t}` },
   { id: "combo", mode: "max", stat: (r) => r.maxCombo,
-    tiers: [[6, 150], [10, 320], [15, 550]],
+    tiers: [[8, 150], [12, 320], [18, 550]],
     fmt: (t) => `Chain a ${t}-pass near-miss combo`,
     prog: (p, t) => `${Math.min(Math.floor(p), t)} / ${t}` },
   { id: "earn", mode: "sum", stat: (r) => r.earned,
-    tiers: [[400, 120], [900, 260], [1500, 450]],
+    tiers: [[700, 120], [1400, 260], [2400, 450]],
     fmt: (t) => `Earn ${fmt(t)} CR today`,
     prog: (p, t) => `${fmt(Math.min(Math.floor(p), t))} / ${fmt(t)}` },
 ];
-const goalTmpl = (id) => GOAL_POOL.find((g) => g.id === id);
+const WEEKLY_POOL = [
+  { id: "wdist", mode: "sum", stat: (r) => r.distKm,
+    tiers: [[100, 1200], [175, 2200], [300, 3500]],
+    fmt: (t) => `Drive ${t} km total this week`,
+    prog: (p, t) => `${Math.min(p, t).toFixed(0)} / ${t} km` },
+  { id: "wpassed", mode: "sum", stat: (r) => r.passed,
+    tiers: [[1200, 1200], [2200, 2200], [3500, 3500]],
+    fmt: (t) => `Pass ${fmt(t)} cars this week`,
+    prog: (p, t) => `${fmt(Math.min(Math.floor(p), t))} / ${fmt(t)}` },
+  { id: "wearn", mode: "sum", stat: (r) => r.earned,
+    tiers: [[12000, 1500], [22000, 2800], [38000, 4500]],
+    fmt: (t) => `Earn ${fmt(t)} CR this week`,
+    prog: (p, t) => `${fmt(Math.min(Math.floor(p), t))} / ${fmt(t)}` },
+  { id: "wscore", mode: "max", stat: (r) => r.score,
+    tiers: [[18000, 1800], [26000, 3000], [35000, 4500]],
+    fmt: (t) => `Score ${fmt(t)} in a single run`,
+    prog: (p, t) => `${fmt(Math.min(Math.floor(p), t))} / ${fmt(t)}` },
+  { id: "wcombo", mode: "max", stat: (r) => r.maxCombo,
+    tiers: [[25, 1800], [35, 3000], [50, 4500]],
+    fmt: (t) => `Chain a ${t}-pass near-miss combo`,
+    prog: (p, t) => `${Math.min(Math.floor(p), t)} / ${t}` },
+];
+const ALL_GOAL_TMPL = [...DAILY_POOL, ...WEEKLY_POOL];
+const goalTmpl = (id) => ALL_GOAL_TMPL.find((g) => g.id === id);
 
-// FNV-1a hash of the date string -> seed; mulberry32 for a stable daily shuffle.
+// FNV-1a hash of the period key -> seed; mulberry32 for a stable shuffle.
 function _goalSeed(s) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -232,22 +260,31 @@ function _goalRng(seed) {
   };
 }
 const _todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
+const _weekStr = () => {
+  const d = new Date();
+  const jan1 = new Date(d.getFullYear(), 0, 1);
+  const week = Math.floor(((d - jan1) / 86400000 + jan1.getDay()) / 7);
+  return `${d.getFullYear()}-W${week}`;
+};
 
-function genGoals(date) {
-  const rand = _goalRng(_goalSeed(date));
-  const pool = GOAL_POOL.slice();
+function genGoalSet(key, pool, count) {
+  const rand = _goalRng(_goalSeed(key));
+  const p = pool.slice();
   const items = [];
-  while (items.length < 3 && pool.length) {
-    const t = pool.splice(Math.floor(rand() * pool.length), 1)[0];
+  while (items.length < count && p.length) {
+    const t = p.splice(Math.floor(rand() * p.length), 1)[0];
     const [target, reward] = t.tiers[Math.floor(rand() * t.tiers.length)];
     items.push({ id: t.id, target, reward, progress: 0, done: false });
   }
-  return { date, items };
+  return { date: key, items };
 }
 function ensureGoals() {
   const today = _todayStr();
-  if (!goals || goals.date !== today || !Array.isArray(goals.items)) goals = genGoals(today);
+  if (!goals || goals.date !== today || !Array.isArray(goals.items)) goals = genGoalSet(today, DAILY_POOL, 3);
+  const wk = _weekStr();
+  if (!weekly || weekly.date !== wk || !Array.isArray(weekly.items)) weekly = genGoalSet(wk, WEEKLY_POOL, 3);
 }
+const allGoalItems = () => { ensureGoals(); return [...goals.items, ...weekly.items]; };
 
 // Live snapshot of where the current run sits against a goal (committed progress
 // from earlier runs + this run so far). "sum" goals add the run; "max" goals take
@@ -266,8 +303,7 @@ function goalLiveValue(it, t) {
 // During a run, fire a toast + reward the instant a goal is met. endRun's
 // trackGoals skips done goals, so nothing is credited or committed twice.
 function checkGoalsLive() {
-  if (!goals) return;
-  for (const it of goals.items) {
+  for (const it of allGoalItems()) {
     if (it.done) continue;
     const t = goalTmpl(it.id);
     if (t && goalLiveValue(it, t) >= it.target) {
@@ -280,9 +316,8 @@ function checkGoalsLive() {
   }
 }
 
-// Roll a finished run's stats into today's goals; returns the goals just completed.
+// Roll a finished run's stats into the goals; returns the goals just completed.
 function trackGoals() {
-  ensureGoals();
   const r = {
     distKm: state.position / DIST_DIV,
     score: state.score,
@@ -291,7 +326,7 @@ function trackGoals() {
     earned: lastEarned,
   };
   const done = [];
-  for (const it of goals.items) {
+  for (const it of allGoalItems()) {
     if (it.done) continue;
     const t = goalTmpl(it.id);
     if (!t) continue;
@@ -1865,7 +1900,7 @@ function celebrate(name) {
 }
 
 // ---- Menu + Garage UI ----
-// One day's goals as a compact panel for the home screen.
+// Daily + weekly goals as a compact panel for the home screen.
 function goalsPanelHTML() {
   ensureGoals();
   const row = (it) => {
@@ -1878,7 +1913,8 @@ function goalsPanelHTML() {
       <span class="goal-prog">${t.prog(it.progress, it.target)}</span>
     </div>`;
   };
-  return `<div class="goals"><div class="goals-head">DAILY GOALS</div>${goals.items.map(row).join("")}</div>`;
+  const section = (title, items) => `<div class="goals-head">${title}</div>${items.map(row).join("")}`;
+  return `<div class="goals">${section("DAILY GOALS", goals.items)}${section("WEEKLY GOALS", weekly.items)}</div>`;
 }
 
 function showMenu() {
