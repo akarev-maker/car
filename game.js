@@ -410,6 +410,9 @@ const state = {
   flash: 0,
   hitFlash: 0,      // red flash on a glancing hit
   shake: 0,         // camera shake amount
+  kick: 0,          // lateral camera impulse from a near-miss / sideswipe (eases back)
+  flashHue: 0,      // 0 = gold near-miss .. 1 = white-hot (rises with combo tier)
+  whiteout: 0,      // crash blowout: white flash + crack lines on the impact frame
   // combo + run stats
   combo: 0,
   comboTimer: 0,    // frames remaining before the combo lapses
@@ -456,6 +459,7 @@ const getEnv = (id) => ENVIRONMENTS.find((e) => e.id === id) || ENVIRONMENTS[0];
 let traffic = [];
 let scenery = [];
 let popups = [];
+let rings = [];   // expanding shockwave rings drawn at near-miss pass points
 
 const input = { steer: 0, throttle: 0, brake: 0 };
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -695,6 +699,9 @@ function uiTone(freq, when, dur, type = "sine", peak = 0.18) {
   o.start(t); o.stop(t + dur + 0.03);
 }
 function audioTick()   { ensureAudio(); uiTone(880, 0, 0.05, "triangle", 0.10); uiTone(1320, 0.02, 0.05, "triangle", 0.07); }
+// A short blip on each near-miss; pitch climbs with the combo tier so a long
+// chain rises in a satisfying ladder.
+function audioCombo(mult) { ensureAudio(); const base = 430 + Math.min(mult, 8) * 78; uiTone(base, 0, 0.06, "triangle", 0.05); uiTone(base * 1.5, 0.03, 0.05, "sine", 0.03); }
 function audioCoin()   { ensureAudio(); uiTone(784, 0, 0.08, "triangle", 0.13); uiTone(1175, 0.06, 0.10, "triangle", 0.13); uiTone(1568, 0.12, 0.16, "sine", 0.10); }
 function audioUnlock() { ensureAudio(); [523, 659, 784, 1047, 1319].forEach((f, i) => uiTone(f, i * 0.08, 0.45, "triangle", 0.11)); }
 function audioDenied() { ensureAudio(); uiTone(150, 0, 0.14, "square", 0.08); uiTone(110, 0.07, 0.18, "square", 0.08); }
@@ -824,8 +831,12 @@ function spawnWave() {
     spawnVehicle(ONC_LANES[Math.floor(Math.random() * ONC_LANES.length)], -1);
 }
 
-function addPopup(x, y, text, color) {
-  popups.push({ x, y, text, color, life: 1 });
+function addPopup(x, y, text, color, big = false) {
+  popups.push({ x, y, text, color, life: 1, big });
+}
+// A shockwave ring that bursts out from a near-miss point and fades.
+function addRing(x, y, closeness, color) {
+  rings.push({ x, y, r: 8, max: 26 + closeness * 70, life: 1, color, w: 2 + closeness * 4 });
 }
 
 // Car-following: within each lane, a faster car can't drive through the car
@@ -1054,14 +1065,22 @@ function update() {
           const pts = Math.round((40 + closeness * 200) * (0.35 + 0.65 * speedFactor) * onc) * state.mult;
           state.score += pts;
           const tag = state.mult > 1 ? `x${state.mult} +${pts}` : `+${pts}`;
+          // Juice: the edge pulse runs hotter (gold -> white) with the combo
+          // tier; the camera kicks away from the car; a ring bursts at the pass.
+          state.flashHue = clamp((state.mult - 1) / 7, 0, 1);
+          state.kick += pan * (0.3 + closeness * 0.7);
+          audioCombo(state.mult);
           if (car.dir < 0 && closeness > 0.4) {
-            addPopup(sp.x, sp.y, "ONCOMING! " + tag, "#ff6b6b");
+            addPopup(sp.x, sp.y, "ONCOMING! " + tag, "#ff6b6b", true);
             state.flash = Math.max(state.flash, Math.max(closeness, 0.6));
+            addRing(sp.x, sp.y, closeness, "255,107,107");
           } else if (closeness > 0.6 && speedFactor > 0.6) {
-            addPopup(sp.x, sp.y, "NEAR MISS " + tag, "#ffd166");
+            addPopup(sp.x, sp.y, "NEAR MISS " + tag, "#ffe07a", true);
             state.flash = Math.max(state.flash, closeness);
+            addRing(sp.x, sp.y, closeness, "255,224,122");
           } else {
-            addPopup(sp.x, sp.y, tag, "#06d6a0");
+            addPopup(sp.x, sp.y, tag, "#54e08a");
+            if (closeness > 0.3) addRing(sp.x, sp.y, closeness, "84,224,138");
           }
         } else {
           state.score += Math.round(8 * (0.5 + 0.5 * speedFactor)) * state.mult;
@@ -1079,9 +1098,17 @@ function update() {
     popups[i].y -= 0.6;
     if (popups[i].life <= 0) popups.splice(i, 1);
   }
+  for (let i = rings.length - 1; i >= 0; i--) {
+    const r = rings[i];
+    r.r += (r.max - r.r) * 0.28; // ease outward
+    r.life -= 0.06;
+    if (r.life <= 0) rings.splice(i, 1);
+  }
   state.flash *= 0.9;
   state.hitFlash *= 0.88;
   state.shake *= 0.85;
+  state.kick *= 0.8;
+  state.whiteout *= 0.85;
   checkGoalsLive(); // celebrate the moment a daily goal is met, mid-run
   // NOTE: HUD + engine audio are presentation, not physics. They run once per
   // rendered frame from loop(), never inside this (possibly multi-step) update.
@@ -1094,6 +1121,7 @@ function sideswipe(pan) {
   state.combo = 0; state.mult = 1; state.comboTimer = 0;
   state.hitFlash = 1;
   state.shake = Math.max(state.shake, 1);
+  state.kick += pan * 1.2;
   audioScrape(pan);
 }
 
@@ -1805,7 +1833,7 @@ function render() {
   camera.updateProjectionMatrix();
   // A clean pass is mostly a visual flash now; only sideswipes/crashes (state.shake) really jolt the camera.
   const shake = state.flash * 0.07 + state.shake * 0.6 + sf * 0.03;
-  camera.position.x = state.playerX * 1.4 + (Math.random() - 0.5) * shake;
+  camera.position.x = state.playerX * 1.4 + state.kick * 0.7 + (Math.random() - 0.5) * shake;
   camera.position.y = 4.3 + (Math.random() - 0.5) * shake * 0.5;
   camera.lookAt(state.playerX * 2.2, 1.2, -26);
 
@@ -1813,29 +1841,104 @@ function render() {
   drawFx(sf);
 }
 
-// 2D overlay: hit flash, near-miss flash, score popups.
-function drawFx(sf = 0) {
-  fxCtx.clearRect(0, 0, fx.width, fx.height);
+// Stable set of radial speed-streak rays (angle + per-ray length/phase jitter),
+// computed once. Biased toward the sides so streaks frame the road, not the sky.
+const _rays = Array.from({ length: 56 }, () => {
+  const a = Math.random() * Math.PI * 2;
+  const side = Math.cos(a);                 // emphasise rays pointing left/right
+  return { ang: a, len: 0.5 + Math.random() * 0.9, phase: Math.random(), w: 0.4 + Math.abs(side) * 0.6 };
+});
 
-  if (state.hitFlash > 0.02) { // red on a sideswipe
-    fxCtx.fillStyle = `rgba(255,40,40,${state.hitFlash * 0.35})`;
-    fxCtx.fillRect(0, 0, fx.width, fx.height);
+// Radial motion streaks + a peripheral vignette that grow with pace, so high
+// speed reads as speed even on a straight road. Center stays clear.
+function drawSpeedFx(W, H, spd) {
+  const cx = W / 2, cy = H * 0.42, R = Math.hypot(W, H) * 0.5;
+  const inner = R * 0.34;                    // keep the focal center streak-free
+  const ph = (performance.now() / 750) % 1;  // streams the rays outward over time
+  fxCtx.save();
+  fxCtx.strokeStyle = `rgba(226,243,255,${0.13 * spd})`;
+  fxCtx.lineCap = "round";
+  fxCtx.beginPath();
+  for (const ray of _rays) {
+    const t = (ray.phase + ph) % 1;
+    const r1 = inner + t * R * 0.55;
+    const r2 = r1 + (34 + 150 * spd) * ray.len;
+    const c = Math.cos(ray.ang), s = Math.sin(ray.ang);
+    fxCtx.lineWidth = ray.w * (1.4 + 2 * spd);
+    fxCtx.moveTo(cx + c * r1, cy + s * r1);
+    fxCtx.lineTo(cx + c * r2, cy + s * r2);
+  }
+  fxCtx.stroke();
+  fxCtx.restore();
+  const vig = fxCtx.createRadialGradient(cx, H / 2, H * 0.28, cx, H / 2, H * 0.8);
+  vig.addColorStop(0, "rgba(0,0,0,0)");
+  vig.addColorStop(1, `rgba(0,0,0,${0.3 * spd})`);
+  fxCtx.fillStyle = vig;
+  fxCtx.fillRect(0, 0, W, H);
+}
+
+// 2D overlay: speed streaks, hit/near-miss flashes, shockwave rings, popups.
+function drawFx(sf = 0) {
+  const W = fx.width, H = fx.height;
+  fxCtx.clearRect(0, 0, W, H);
+
+  const spd = clamp((sf - 0.5) / 0.5, 0, 1);   // streaks fade in past half speed
+  if (spd > 0.01) drawSpeedFx(W, H, spd);
+
+  if (state.hitFlash > 0.02) {                 // red impact wash (sideswipe / crash)
+    fxCtx.fillStyle = `rgba(255,46,46,${state.hitFlash * 0.4})`;
+    fxCtx.fillRect(0, 0, W, H);
+  }
+  if (state.whiteout > 0.02) drawCrash(W, H, state.whiteout); // crash blowout + cracks
+
+  if (state.flash > 0.02) {                    // near-miss edge pulse, gold -> white-hot
+    const h = state.flashHue;
+    const g = Math.round(209 + (255 - 209) * h), b = Math.round(102 + (255 - 102) * h);
+    fxCtx.strokeStyle = `rgba(255,${g},${b},${state.flash * 0.72})`;
+    fxCtx.lineWidth = 8 + state.flash * 10;
+    fxCtx.strokeRect(5, 5, W - 10, H - 10);
   }
 
-  if (state.flash > 0.02) { // gold near-miss border
-    fxCtx.strokeStyle = `rgba(255,209,102,${state.flash * 0.7})`;
-    fxCtx.lineWidth = 10;
-    fxCtx.strokeRect(5, 5, fx.width - 10, fx.height - 10);
+  for (const r of rings) {                     // expanding shockwave rings
+    fxCtx.strokeStyle = `rgba(${r.color},${clamp(r.life, 0, 1) * 0.85})`;
+    fxCtx.lineWidth = r.w;
+    fxCtx.beginPath();
+    fxCtx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+    fxCtx.stroke();
   }
 
   fxCtx.textAlign = "center";
-  fxCtx.font = "bold 18px 'Segoe UI', sans-serif";
+  fxCtx.lineJoin = "round";
   for (const pop of popups) {
+    const grow = clamp((1 - pop.life) / 0.16, 0, 1);            // pop-in over first 16%
+    const size = Math.round((pop.big ? 23 : 18) * ((pop.big ? 1.45 : 1.2) - (pop.big ? 0.45 : 0.2) * grow));
     fxCtx.globalAlpha = clamp(pop.life, 0, 1);
+    fxCtx.font = `800 ${size}px Sora, system-ui, sans-serif`;
+    fxCtx.lineWidth = 3.5;
+    fxCtx.strokeStyle = "rgba(0,0,0,0.6)";
+    fxCtx.strokeText(pop.text, pop.x, pop.y);
     fxCtx.fillStyle = pop.color;
     fxCtx.fillText(pop.text, pop.x, pop.y);
   }
   fxCtx.globalAlpha = 1;
+}
+
+// Crash impact frame: a white blowout that fades, plus jagged crack lines
+// radiating from center — sells the hit on the frozen frame before results.
+function drawCrash(W, H, k) {
+  fxCtx.fillStyle = `rgba(255,255,255,${k * 0.5})`;
+  fxCtx.fillRect(0, 0, W, H);
+  const cx = W / 2, cy = H * 0.5;
+  fxCtx.strokeStyle = `rgba(255,255,255,${k * 0.8})`;
+  fxCtx.lineWidth = 2;
+  fxCtx.beginPath();
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * Math.PI * 2 + i * 0.7;
+    const len = (0.3 + (i % 3) * 0.16) * Math.hypot(W, H);
+    fxCtx.moveTo(cx, cy);
+    fxCtx.lineTo(cx + Math.cos(a) * len, cy + Math.sin(a) * len * 0.8);
+  }
+  fxCtx.stroke();
 }
 
 // Freeze the game while a mobile player holds the device in portrait.
@@ -1992,9 +2095,11 @@ function resetRunState() {
   state.flash = state.hitFlash = state.shake = 0;
   state.combo = 0; state.comboTimer = 0; state.mult = 1;
   state.maxCombo = 0; state.passed = 0; state.topSpeed = 0;
+  state.kick = 0; state.flashHue = 0; state.whiteout = 0;
   traffic = [];
   scenery = [];
   popups = [];
+  rings = [];
 }
 
 function startGame() {
@@ -2029,6 +2134,7 @@ function endRun(crashed, toHome) {
   if (crashed) {
     audioCrash();
     state.shake = 1.6;
+    state.whiteout = 1; state.hitFlash = 1; // blowout flash + cracks on the frozen frame
     render(); // one shaken, frozen frame for impact
   }
 
