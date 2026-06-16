@@ -1223,7 +1223,7 @@ function initSharedAssets() {
   // tracks nightFactor). Mild UV stretch on tall blocks is invisible at speed.
   const winTex = makeWindowTexture();
   _matWindow   = new THREE.MeshStandardMaterial({
-    map: winTex, emissiveMap: winTex, emissive: 0xfff0c0, emissiveIntensity: 0.1,
+    map: winTex, emissiveMap: winTex, emissive: 0xe8f1ff, emissiveIntensity: 0.1,
     color: 0xdfe4ec, roughness: 0.85,   // near-white so the texture reads true
   });
   _neonMats = [0xff3aa5, 0x21e6ff, 0x9d4dff, 0x4dff88, 0xffc23d]
@@ -1363,7 +1363,7 @@ function makeWindowTexture() {
   const x = c.getContext("2d");
   x.fillStyle = "#0b0e15"; x.fillRect(0, 0, c.width, c.height); // concrete + mullions
   const dark = ["#10141d", "#141a26", "#0d1119"];               // unlit glass tints
-  const lit  = ["#ffe6a0", "#ffd27a", "#fff2d2", "#cfe0ff"];    // lights-on (mostly warm)
+  const lit  = ["#dfeeff", "#bcd4ff", "#eef6ff", "#9fc6ff"];    // lights-on (cool white/blue glass)
   for (let cy = 0; cy < BWIN_ROWS; cy++)
     for (let cx = 0; cx < BWIN_COLS; cx++) {
       const on = Math.random() < 0.32;     // a minority of windows are lit
