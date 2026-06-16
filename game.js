@@ -424,10 +424,9 @@ const ENVIRONMENTS = [
     blurb: "Rolling green country roads. Where every driver starts out.",
     day: { sky: 0x86c8e8, fogNear: 70, fogFar: 380, hemiSky: 0xbfe3ff, hemiGround: 0x4a6b3a, hemiInt: 1.0, sunColor: 0xfff1da, sunInt: 1.0, grass: 0x2f9e44 },
     night: { sky: 0x050811, fogNear: 48, fogFar: 290, hemiSky: 0x2b3a64, hemiGround: 0x06080f, hemiInt: 0.6, sunColor: 0xaec2ff, sunInt: 0.85, grass: 0x10331e } },
-  { id: "desert", name: "Desert", scape: "desert", price: 5000,
-    blurb: "Sun-baked dunes and saguaro by day; cool, starlit sand by night.",
-    day: { sky: 0xf2c879, fogNear: 95, fogFar: 440, hemiSky: 0xffe6b0, hemiGround: 0x9c6b3f, hemiInt: 1.05, sunColor: 0xfff0d0, sunInt: 1.2, grass: 0xc9a063 },
-    night: { sky: 0x161229, fogNear: 72, fogFar: 380, hemiSky: 0x39487a, hemiGround: 0x2b2438, hemiInt: 0.58, sunColor: 0xc2d2ff, sunInt: 0.72, grass: 0x5a4f54 } },
+  { id: "desert", name: "Desert", scape: "desert", price: 5000, dayOnly: true,
+    blurb: "Sun-baked dunes and saguaro under an endless warm afternoon sky.",
+    day: { sky: 0xf2c879, fogNear: 95, fogFar: 440, hemiSky: 0xffe6b0, hemiGround: 0x9c6b3f, hemiInt: 1.05, sunColor: 0xfff0d0, sunInt: 1.2, grass: 0xc9a063 } },
   { id: "city", name: "City", scape: "city", price: 15000, startNight: true,
     blurb: "Glass towers and streetlights. The night shift never really ends.",
     day: { sky: 0x9fb6cf, fogNear: 60, fogFar: 340, hemiSky: 0xd5e3f0, hemiGround: 0x4a4d57, hemiInt: 1.0, sunColor: 0xfff4e2, sunInt: 1.0, grass: 0x44474f },
@@ -1225,7 +1224,7 @@ function initSharedAssets() {
   const winTex = makeWindowTexture();
   _matWindow   = new THREE.MeshStandardMaterial({
     map: winTex, emissiveMap: winTex, emissive: 0xfff0c0, emissiveIntensity: 0.1,
-    color: 0x70788a, roughness: 0.85,
+    color: 0xdfe4ec, roughness: 0.85,   // near-white so the texture reads true
   });
   _neonMats = [0xff3aa5, 0x21e6ff, 0x9d4dff, 0x4dff88, 0xffc23d]
     .map((c) => new THREE.MeshBasicMaterial({ color: c }));
@@ -1350,21 +1349,30 @@ function buildVehicle(o) {
   return buildProceduralCar(o.color);
 }
 
-// A tiling wall texture: dark concrete with a grid of windows, ~half of them
-// lit. Used as both colour and emissive map so windows show by day and glow at
-// night. One shared canvas -> every building in a city reuses it for free.
+// One facade "block" of BWIN_COLS x BWIN_ROWS windows on a concrete wall: a
+// narrow mullion grid with most panes dark glass and a scattering lit warm.
+// Used as both colour and emissive map (windows show by day, glow at night).
+// The texture has NO built-in repeat — buildingGeo tiles it per building so
+// window size stays roughly constant whatever the tower's proportions, instead
+// of a fixed 2x5 grid stretched into big slabs. One shared canvas for the city.
+const BWIN_COLS = 5, BWIN_ROWS = 4;
 function makeWindowTexture() {
-  const c = document.createElement("canvas"); c.width = 64; c.height = 96;
+  const cell = 26, m = 4;                 // px per window cell + mullion margin
+  const c = document.createElement("canvas");
+  c.width = BWIN_COLS * cell; c.height = BWIN_ROWS * cell;
   const x = c.getContext("2d");
-  x.fillStyle = "#0c0f16"; x.fillRect(0, 0, 64, 96);
-  for (let yy = 6; yy < 90; yy += 11)
-    for (let xx = 6; xx < 58; xx += 13) {
-      x.fillStyle = Math.random() < 0.55 ? "#ffe6a0" : "#161d2b"; // lit vs dark pane
-      x.fillRect(xx, yy, 8, 7);
+  x.fillStyle = "#0b0e15"; x.fillRect(0, 0, c.width, c.height); // concrete + mullions
+  const dark = ["#10141d", "#141a26", "#0d1119"];               // unlit glass tints
+  const lit  = ["#ffe6a0", "#ffd27a", "#fff2d2", "#cfe0ff"];    // lights-on (mostly warm)
+  for (let cy = 0; cy < BWIN_ROWS; cy++)
+    for (let cx = 0; cx < BWIN_COLS; cx++) {
+      const on = Math.random() < 0.32;     // a minority of windows are lit
+      x.fillStyle = on ? lit[Math.floor(Math.random() * lit.length)]
+                       : dark[Math.floor(Math.random() * dark.length)];
+      x.fillRect(cx * cell + m, cy * cell + m, cell - 2 * m, cell - 2 * m);
     }
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(2, 5);
   return tex;
 }
 
@@ -1403,12 +1411,51 @@ function buildRock() {
   return g;
 }
 // --- City ---------------------------------------------------------------
+// Window cells should stay roughly this big in world units whatever the tower
+// size; buildingGeo tiles the BWIN_COLS x BWIN_ROWS block an integer number of
+// times to land near it (integer keeps the window grid seamless).
+const BWIN_W = 2.2, BWIN_FLOOR = 3.4;
+const _buildGeoCache = {};
+function buildingGeo(w, h, d) {
+  const tx = Math.max(1, Math.round(w / (BWIN_COLS * BWIN_W)));
+  const tz = Math.max(1, Math.round(d / (BWIN_COLS * BWIN_W)));
+  const ty = Math.max(1, Math.round(h / (BWIN_ROWS * BWIN_FLOOR)));
+  const key = tx + "," + tz + "," + ty;
+  if (_buildGeoCache[key]) return _buildGeoCache[key];
+  // Unit cube with per-face UVs scaled to the tile counts; the mesh is then
+  // scaled to w/h/d (UV tiling is independent of mesh scale, so geos are shared
+  // across every building with the same tile counts).
+  const g = new THREE.BoxGeometry(1, 1, 1);
+  const uv = g.attributes.uv;
+  const face = (f, su, sv) => { for (let k = 0; k < 4; k++) { const i = f * 4 + k; uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv); } };
+  face(0, tz, ty); face(1, tz, ty);   // +x / -x  (depth-facing sides)
+  face(4, tx, ty); face(5, tx, ty);   // +z / -z  (width-facing front/back)
+  // top (2) + bottom (3) keep 1x1 — hidden by the roof cap / ground anyway.
+  uv.needsUpdate = true;
+  _buildGeoCache[key] = g;
+  return g;
+}
 function buildBuilding(o) {
   const g = new THREE.Group();
-  const b = new THREE.Mesh(_geo.building, _matWindow);
-  b.scale.set(o.w, o.h, o.d); b.position.y = o.h / 2; g.add(b);
-  const cap = new THREE.Mesh(_geo.building, _matBodyDark); // flat roof slab
-  cap.scale.set(o.w * 0.96, 0.6, o.d * 0.96); cap.position.y = o.h + 0.3; g.add(cap);
+  const shaft = new THREE.Mesh(buildingGeo(o.w, o.h, o.d), _matWindow);
+  shaft.scale.set(o.w, o.h, o.d); shaft.position.y = o.h / 2; g.add(shaft);
+  // A solid concrete ground floor + roof slab make it read as a structure
+  // rather than a glowing slab — the data-center look came from neither.
+  const base = new THREE.Mesh(_geo.building, _matBodyDark);
+  base.scale.set(o.w * 1.05, 1.5, o.d * 1.05); base.position.y = 0.75; g.add(base);
+  const cap = new THREE.Mesh(_geo.building, _matBodyDark);
+  cap.scale.set(o.w * 1.02, 0.7, o.d * 1.02); cap.position.y = o.h + 0.1; g.add(cap);
+  // Small rooftop unit (tank / AC housing) for skyline texture.
+  const roof = new THREE.Mesh(_geo.building, _matBodyDark);
+  roof.scale.set(o.w * 0.42, 1.3, o.d * 0.42);
+  roof.position.set((Math.random() - 0.5) * o.w * 0.4, o.h + 1.0, (Math.random() - 0.5) * o.d * 0.4);
+  g.add(roof);
+  // Taller towers sometimes step back into a second, lit upper stage.
+  if (o.h > 20 && Math.random() < 0.55) {
+    const sw = o.w * 0.62, sd = o.d * 0.62, sh = o.h * (0.28 + Math.random() * 0.22);
+    const set = new THREE.Mesh(buildingGeo(sw, sh, sd), _matWindow);
+    set.scale.set(sw, sh, sd); set.position.y = o.h + 0.45 + sh / 2; g.add(set);
+  }
   return g;
 }
 function buildStreetlight() {
@@ -1661,6 +1708,7 @@ function scapeAt(_km) {
 function dayPhase(km) {
   const env = getEnv(selectedEnv);
   if (env.nightOnly) return 1;
+  if (env.dayOnly) return 0;
   const u = km / DAYNIGHT_CYCLE_KM + (env.startNight ? 0.5 : 0);
   return nightFactorAt(((u % 1) + 1) % 1);
 }
@@ -1670,8 +1718,10 @@ function dayPhase(km) {
 function applyBiome(km) {
   const env = getEnv(selectedEnv);
   const t = dayPhase(km);
-  const a = env.day || env.night;   // night-only envs reuse `night` as both ends
-  const b = env.night;
+  // Day-only / night-only worlds define just one palette; fall back so both
+  // ends of the blend are always valid (mix reads both even when t pins to one).
+  const a = env.day || env.night;
+  const b = env.night || env.day;
   const mix = (ka, kb) => ka + (kb - ka) * t;
 
   _biomeSky.set(a.sky).lerp(_biomeTmp.set(b.sky), t);
@@ -1696,8 +1746,8 @@ function applyBiome(km) {
   if (_matWindow) _matWindow.emissiveIntensity = 0.1 + nightFactor * 1.7;
   if (_matLamp)   _matLamp.emissiveIntensity   = 0.25 + nightFactor * 2.4;
 
-  // Name the environment, and (for day/night ones) the time of day we're in.
-  const label = env.nightOnly ? env.name : `${env.name} · ${t < 0.5 ? "Day" : "Night"}`;
+  // Name the environment, and (for cycling worlds) the time of day we're in.
+  const label = (env.nightOnly || env.dayOnly) ? env.name : `${env.name} · ${t < 0.5 ? "Day" : "Night"}`;
   if (label !== biomeShown) showBiome(label);
 }
 
@@ -2518,6 +2568,7 @@ function refreshEnv() {
   else action = `<button class="env-btn buy" data-env="${e.id}" ${bank < e.price ? "disabled" : ""}>Unlock ${credCost(e.price)}</button>`;
 
   const timeBadge = e.nightOnly ? "🌙 Night only"
+    : e.dayOnly ? "☀️ Day only"
     : e.startNight ? "🌙 → ☀️ Day & night · opens at night"
     : "☀️ → 🌙 Day & night";
 
