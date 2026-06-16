@@ -55,13 +55,14 @@ canvas {
   background: #6cc7e8;
 }
 
-/* 2D overlay for score popups + near-miss flash, on top of the WebGL canvas */
+/* 2D overlay for score popups + near-miss flash, on top of the WebGL canvas but
+   BELOW the HUD (z-index 3) so the speed vignette/streaks never dim the score. */
 #fx {
   position: absolute;
   inset: 0;
   background: transparent;
   pointer-events: none;
-  z-index: 4;
+  z-index: 2;
 }
 
 #hud {

@@ -735,6 +735,9 @@ window.addEventListener("keyup", (e) => {
     case "ArrowDown": case "s": case "S": keys.down = false; break;
   }
 });
+// Releasing focus (alt-tab, clicking away) never fires keyup, which would leave
+// a held key "stuck on". Clear all inputs whenever the window loses focus.
+window.addEventListener("blur", () => { keys.left = keys.right = keys.up = keys.down = false; });
 
 // ---- Touch controls (mobile) ----
 // Hold buttons that emulate the arrow keys: ◀ ▶ steer, GAS accelerates, BRAKE
@@ -1883,7 +1886,7 @@ function drawFx(sf = 0) {
   fxCtx.clearRect(0, 0, W, H);
 
   const spd = clamp((sf - 0.5) / 0.5, 0, 1);   // streaks fade in past half speed
-  if (spd > 0.01) drawSpeedFx(W, H, spd);
+  if (spd > 0.01 && quality === "high") drawSpeedFx(W, H, spd); // skip eye-candy on Low
 
   if (state.hitFlash > 0.02) {                 // red impact wash (sideswipe / crash)
     fxCtx.fillStyle = `rgba(255,46,46,${state.hitFlash * 0.4})`;
