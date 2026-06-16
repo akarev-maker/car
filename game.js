@@ -154,7 +154,7 @@ let trafficMode = "twoway"; // "oneway" (all lanes your way) | "twoway" (oncomin
 let trafficDensity = "medium"; // "low" | "medium" | "high" — see TRAFFIC_DENSITY
 const densityCfg = () => TRAFFIC_DENSITY[trafficDensity] || TRAFFIC_DENSITY.medium;
 const spawnAhead = () => SPAWN_DZ * densityCfg().sight; // live spawn distance / sightline
-let speedUnit = "kmh";      // "kmh" | "mph" — display only; internal units unchanged
+let speedUnit = "mph";      // "kmh" | "mph" — display only; internal units unchanged (mph by default)
 let quality = "high";       // "high" | "low" — Low caps the render resolution for slow GPUs
 const QUALITY_DPR = { high: 1.5, low: 1.0 }; // pixel-ratio cap per quality (fill-rate lever)
 let highScore = 0;
@@ -178,7 +178,7 @@ function loadProgress() {
     selectedEnv = localStorage.getItem("tr_env") || "plains";
     trafficMode = localStorage.getItem("tr_mode") === "oneway" ? "oneway" : "twoway";
     trafficDensity = TRAFFIC_DENSITY[localStorage.getItem("tr_density")] ? localStorage.getItem("tr_density") : "medium";
-    speedUnit = localStorage.getItem("tr_unit") === "mph" ? "mph" : "kmh";
+    speedUnit = localStorage.getItem("tr_unit") === "kmh" ? "kmh" : "mph"; // default mph for new players
     quality = localStorage.getItem("tr_quality") === "low" ? "low" : "high";
     muted = localStorage.getItem("tr_muted") === "1";
     highScore = parseInt(localStorage.getItem("tr_hi")) || 0;
@@ -388,7 +388,7 @@ function showToast(inner, cls = "") {
 function goalToast(it) {
   const t = goalTmpl(it.id);
   showToast(
-    `<span class="toast-ico">✓</span>` +
+    `<span class="toast-ico">${ico("ico-check")}</span>` +
     `<div class="toast-body"><b>Goal complete</b><span>${t.fmt(it.target)}</span></div>` +
     `<span class="toast-rew">${CRED_ICO}${it.reward}</span>`,
     "goal"
@@ -2074,7 +2074,7 @@ function showResults(isHi) {
       </div>
       <div class="results-earn">+ <span class="cred">${CRED_ICO}<span class="cred-num" id="earn-num" data-val="0">0</span></span> CR earned</div>
       ${goalsJustDone.length ? `<div class="results-goals">${goalsJustDone.map((it) =>
-        `<div class="rgoal">✓ ${goalTmpl(it.id).fmt(it.target)} <b>+${it.reward}</b></div>`).join("")}</div>` : ""}
+        `<div class="rgoal"><span class="rgoal-l">${ico("ico-check")} ${goalTmpl(it.id).fmt(it.target)}</span> <b>+${it.reward}</b></div>`).join("")}</div>` : ""}
       <div class="results-btns">
         <button id="retry-btn">Retry</button>
         <button id="r-garage" class="alt">Garage</button>
@@ -2169,7 +2169,7 @@ function goalsPanelHTML() {
     const pct = Math.round(clamp(it.progress / it.target, 0, 1) * 100);
     return `<div class="goal ${it.done ? "done" : ""}">
       <div class="goal-top"><span class="goal-text">${t.fmt(it.target)}</span>` +
-      `<span class="goal-rew">${it.done ? "✓ Done" : CRED_ICO + " " + it.reward}</span></div>
+      `<span class="goal-rew">${it.done ? ico("ico-check") + " Done" : CRED_ICO + " " + it.reward}</span></div>
       <div class="goal-bar"><i style="width:${pct}%"></i></div>
       <span class="goal-prog">${t.prog(it.progress, it.target)}</span>
     </div>`;
@@ -2459,7 +2459,7 @@ function refreshShowroom() {
   const accent = RARITY_COLOR[c.tier] || c.color;
 
   let action;
-  if (isSel) action = `<span class="tag sel">★ Selected</span>`;
+  if (isSel) action = `<span class="tag sel">${ico("ico-check")} Selected</span>`;
   else if (isOwned) action = `<button class="alt car-btn" data-car="${c.id}">Select</button>`;
   else action = `<button class="car-btn buy" data-car="${c.id}" ${bank < c.price ? "disabled" : ""}>Buy ${credCost(c.price)}</button>`;
 
@@ -2595,7 +2595,7 @@ function refreshEnv() {
   const accent = hexColor((e.day || e.night).sky);
 
   let action;
-  if (isSel) action = `<span class="tag sel">★ Selected</span>`;
+  if (isSel) action = `<span class="tag sel">${ico("ico-check")} Selected</span>`;
   else if (isOwned) action = `<button class="alt env-btn" data-env="${e.id}">Drive here</button>`;
   else action = `<button class="env-btn buy" data-env="${e.id}" ${bank < e.price ? "disabled" : ""}>Unlock ${credCost(e.price)}</button>`;
 
