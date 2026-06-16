@@ -1072,6 +1072,7 @@ body.touch.playing #mute { left: 50%; bottom: 16px; transform: translateX(6px); 
 @keyframes toast-in { from { opacity: 0; transform: translateY(-14px) scale(0.95); } to { opacity: 1; transform: none; } }
 @keyframes toast-out { to { opacity: 0; transform: translateY(-10px); } }
 .toast-ico { display: inline-flex; color: #5ef0b0; }
+.toast-ico.evt { color: var(--accent); }
 .toast-ico .ico { width: 18px; height: 18px; }
 .toast-body { display: flex; flex-direction: column; line-height: 1.25; text-align: left; }
 .toast-body b { font-size: 13px; color: #ffd166; }

@@ -418,6 +418,9 @@ const state = {
   shield: false,    // a held shield that auto-saves the next fatal hit
   shieldCharge: 0,  // 0..1 progress toward the next shield (from near-misses)
   invuln: 0,        // frames of phase-through after a shield save
+  event: null,      // active dynamic event { id, frames } or null
+  eventCD: 0,       // frames until the next event may start
+  rain: 0,          // 0..1 eased rain intensity (visual + grip)
   // combo + run stats
   combo: 0,
   comboTimer: 0,    // frames remaining before the combo lapses
@@ -443,6 +446,20 @@ const SLOWMO_CLOSE = 0.9;   // closeness above this counts as "exceptional"
 const SHIELD_GAIN_BASE = 0.03;   // charge per near-miss, regardless of closeness
 const SHIELD_GAIN_CLOSE = 0.07;  // extra charge scaled by how close it was
 const SHIELD_INVULN = 90;        // frames (~1.5s) of phasing after a save
+
+// ---- Dynamic events / weather ----
+// Occasional run events that shake up the road. All are CHEAP: rain is a 2D
+// overlay + grip/fog tweaks (no 3D particles), rush is just a denser spawn rate,
+// fog is a shorter sightline. One runs at a time, announced by a toast.
+const EVENT_MIN_KM = 1.2;        // no events until you've driven this far
+const EVENT_GAP_MIN = 1500, EVENT_GAP_MAX = 2700; // frames between events
+const EVENT_DUR_MIN = 900,  EVENT_DUR_MAX = 1500; // frames an event lasts
+const EVENTS = [
+  { id: "rain", name: "Rain",      blurb: "Slick roads — ease off the wheel", ico: "ico-rain" },
+  { id: "rush", name: "Rush Hour", blurb: "Heavy traffic moving in",          ico: "ico-car"  },
+  { id: "fog",  name: "Fog Bank",  blurb: "Visibility dropping",              ico: "ico-fog"  },
+];
+const _randInt = (a, b) => a + Math.floor(Math.random() * (b - a));
 const DIST_DIV = 16000;     // game-units per displayed "km"
 const CREDIT_RATE = 0.125;  // credits earned = score x this (score stays the bragging number)
 
@@ -737,6 +754,8 @@ function audioSlowmo() {
 function audioShield() { ensureAudio(); [523, 784, 1047, 1568].forEach((f, i) => uiTone(f, i * 0.05, 0.5, "triangle", 0.09)); }
 // A clean two-note "armed" ding when a shield finishes charging.
 function audioShieldReady() { ensureAudio(); uiTone(880, 0, 0.12, "sine", 0.08); uiTone(1320, 0.09, 0.16, "sine", 0.07); }
+// A soft low alert when a dynamic event rolls in.
+function audioEvent() { ensureAudio(); uiTone(294, 0, 0.18, "sine", 0.07); uiTone(392, 0.1, 0.22, "sine", 0.06); }
 function audioCoin()   { ensureAudio(); uiTone(784, 0, 0.08, "triangle", 0.13); uiTone(1175, 0.06, 0.10, "triangle", 0.13); uiTone(1568, 0.12, 0.16, "sine", 0.10); }
 function audioUnlock() { ensureAudio(); [523, 659, 784, 1047, 1319].forEach((f, i) => uiTone(f, i * 0.08, 0.45, "triangle", 0.11)); }
 function audioDenied() { ensureAudio(); uiTone(150, 0, 0.14, "square", 0.08); uiTone(110, 0.07, 0.18, "square", 0.08); }
@@ -867,6 +886,25 @@ function spawnWave() {
   const oncChance = Math.min(0.85, (0.25 + state.position / 50000) * onc);
   if (Math.random() < oncChance)
     spawnVehicle(ONC_LANES[Math.floor(Math.random() * ONC_LANES.length)], -1);
+}
+
+// Run one event at a time: count it down, then cool down before the next. The
+// effects (grip, spawn rate, fog) are read live elsewhere from state.event/rain.
+function updateEvents() {
+  if (state.event) {
+    if (--state.event.frames <= 0) { state.event = null; state.eventCD = _randInt(EVENT_GAP_MIN, EVENT_GAP_MAX); }
+  } else if (state.position / DIST_DIV > EVENT_MIN_KM && --state.eventCD <= 0) {
+    const e = EVENTS[Math.floor(Math.random() * EVENTS.length)];
+    state.event = { id: e.id, frames: _randInt(EVENT_DUR_MIN, EVENT_DUR_MAX) };
+    showToast(
+      `<span class="toast-ico evt">${ico(e.ico)}</span>` +
+      `<div class="toast-body"><b>${e.name}</b><span>${e.blurb}</span></div>`, "event");
+    audioEvent();
+  }
+  // Rain intensity eases in while a rain event runs and out when it ends.
+  const target = state.event && state.event.id === "rain" ? 1 : 0;
+  state.rain += (target - state.rain) * 0.04;
+  if (state.rain < 0.005) state.rain = 0;
 }
 
 function addPopup(x, y, text, color, big = false) {
@@ -1045,8 +1083,8 @@ function update() {
   state.speed = clamp(state.speed, 0, state.maxSpeed);
   state.position += state.speed;
 
-  // Steering (handling scales with the car)
-  const grip = 0.25 + 0.75 * (state.speed / state.maxSpeed);
+  // Steering (handling scales with the car; rain makes it floatier)
+  const grip = (0.25 + 0.75 * (state.speed / state.maxSpeed)) * (1 - 0.32 * state.rain);
   state.playerVX += input.steer * STEER_ACCEL * activeStats.handling * grip;
   if (input.steer === 0) state.playerVX *= STEER_FRICTION;
   state.playerVX = clamp(state.playerVX, -STEER_MAX_V * activeStats.handling, STEER_MAX_V * activeStats.handling);
@@ -1054,14 +1092,17 @@ function update() {
   if (state.playerX < -PLAYER_X_LIMIT) { state.playerX = -PLAYER_X_LIMIT; state.playerVX = 0; }
   if (state.playerX > PLAYER_X_LIMIT) { state.playerX = PLAYER_X_LIMIT; state.playerVX = 0; }
 
-  // Spawn traffic by distance (denser over time), scaled by chosen density.
-  const spawnGap = Math.max(1500, 3000 - state.position / 30) * densityCfg().gap;
+  // Spawn traffic by distance (denser over time), scaled by chosen density and
+  // squeezed during a Rush Hour event.
+  const rush = state.event && state.event.id === "rush" ? 0.45 : 1;
+  const spawnGap = Math.max(1500, 3000 - state.position / 30) * densityCfg().gap * rush;
   if (state.position - state.lastSpawnPos > spawnGap) {
     state.lastSpawnPos = state.position;
     spawnWave();
   }
 
   updateScenery();
+  updateEvents();
 
   // Advance traffic (oncoming travels toward you), weave, then de-overlap lanes.
   for (const car of traffic) { car.z += car.speed * car.dir; updateLaneChange(car); }
@@ -1853,14 +1894,16 @@ function applyBiome(km) {
   scene.background = _biomeSky;        // background tracks the live sky color
   scene.fog.color.copy(_biomeSky);     // Fog keeps its own Color, so copy into it
   scene.fog.near = mix(a.fogNear, b.fogNear);
-  scene.fog.far  = mix(a.fogFar,  b.fogFar) * densityCfg().sight; // quieter road sees further
+  // Quieter road sees further; rain & fog-bank events pull the horizon in.
+  const fogMul = Math.max(0.4, 1 - 0.3 * state.rain - (state.event && state.event.id === "fog" ? 0.45 : 0));
+  scene.fog.far  = mix(a.fogFar,  b.fogFar) * densityCfg().sight * fogMul;
 
   hemiLight.color.set(a.hemiSky).lerp(_biomeTmp.set(b.hemiSky), t);
   hemiLight.groundColor.set(a.hemiGround).lerp(_biomeTmp.set(b.hemiGround), t);
   hemiLight.intensity = mix(a.hemiInt, b.hemiInt);
 
   sunLight.color.set(a.sunColor).lerp(_biomeTmp.set(b.sunColor), t);
-  sunLight.intensity = mix(a.sunInt, b.sunInt);
+  sunLight.intensity = mix(a.sunInt, b.sunInt) * (1 - 0.35 * state.rain); // overcast in rain
 
   grassMat.color.set(a.grass).lerp(_biomeTmp.set(b.grass), t);
 
@@ -1931,6 +1974,29 @@ const _rays = Array.from({ length: 56 }, () => {
   return { ang: a, len: 0.5 + Math.random() * 0.9, phase: Math.random(), w: 0.4 + Math.abs(side) * 0.6 };
 });
 
+// Stable set of falling raindrops (normalised positions); animated by time so
+// drawRain mutates nothing. A 2D overlay — no 3D particles, so it's cheap.
+const _drops = Array.from({ length: 150 }, () => ({
+  x: Math.random(), y0: Math.random(), sp: 0.7 + Math.random() * 0.8, len: 0.04 + Math.random() * 0.05,
+}));
+function drawRain(W, H, k) {
+  const t = performance.now() / 1000;
+  const slant = 0.14;
+  fxCtx.strokeStyle = `rgba(200,218,240,${0.4 * k})`;
+  fxCtx.lineWidth = 1.2;
+  fxCtx.beginPath();
+  for (const d of _drops) {
+    const y = ((d.y0 + t * d.sp) % 1) * H;
+    const x = d.x * W;
+    const len = d.len * H * (0.5 + 0.5 * k);
+    fxCtx.moveTo(x, y);
+    fxCtx.lineTo(x - slant * len, y + len);
+  }
+  fxCtx.stroke();
+  fxCtx.fillStyle = `rgba(34,40,52,${0.16 * k})`; // cool wash to darken the scene
+  fxCtx.fillRect(0, 0, W, H);
+}
+
 // Radial motion streaks + a peripheral vignette that grow with pace, so high
 // speed reads as speed even on a straight road. Center stays clear.
 function drawSpeedFx(W, H, spd) {
@@ -1966,6 +2032,7 @@ function drawFx(sf = 0) {
 
   const spd = clamp((sf - 0.5) / 0.5, 0, 1);   // streaks fade in past half speed
   if (spd > 0.01 && quality === "high") drawSpeedFx(W, H, spd); // skip eye-candy on Low
+  if (state.rain > 0.03 && quality === "high") drawRain(W, H, state.rain);
 
   if (state.slowmoT > 0) {                      // bullet-time: cyan time-bend vignette
     const k = state.slowmoT / SLOWMO_MS;
@@ -2199,6 +2266,7 @@ function resetRunState() {
   state.kick = 0; state.flashHue = 0; state.whiteout = 0;
   state.slowmoT = 0; state.slowmoCD = 0;
   state.shield = false; state.shieldCharge = 0; state.invuln = 0;
+  state.event = null; state.eventCD = 500; state.rain = 0;
   traffic = [];
   scenery = [];
   popups = [];
@@ -2233,6 +2301,7 @@ function quitRun() { endRun(false, true); }    // chose to stop (Esc) -> straigh
 function endRun(crashed, toHome) {
   if (!state.running) return;
   state.running = false;
+  state.event = null; state.rain = 0; // don't carry weather onto the menu hero
   if (audio) audio.engineGain.gain.setTargetAtTime(0, audio.ac.currentTime, 0.1);
   if (crashed) {
     audioCrash();
