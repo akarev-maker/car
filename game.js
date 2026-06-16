@@ -400,19 +400,35 @@ const DIST_DIV = 16000;     // game-units per displayed "km"
 const CREDIT_RATE = 0.125;  // credits earned = score x this (score stays the bragging number)
 
 // ---- Biome engine -------------------------------------------------------
-// The world continuously cycles between the biomes as you drive. Each entry is
-// a full set of environment params; every frame the engine blends Day->Night by
-// a curve that holds night far longer than day, with smooth dusk/dawn fades.
-const BIOME_CYCLE_KM = 10;    // distance for one full day->night->day lap (slow)
+// The world cycles through an ORDERED RING of regions as you drive. Each entry
+// is a full environment param set; every frame the engine holds steady inside
+// the current region, then smoothly blends into the next one (see ringSample).
+// The ring is also arranged as a day->night->dawn arc, so the time of day rides
+// along with the change of scenery. `scape` names the roadside prop palette
+// (see spawnScenery); `night` (0..1) drives headlights, window + lamp glow.
+//   grass = the ground-plane colour, so it doubles as sand / concrete / etc.
+const BIOME_CYCLE_KM = 20;    // distance for one full lap through every region (slow)
 const BIOMES = [
-  { name: "Day",
+  { name: "Plains", scape: "plains", night: 0,
     sky: 0x86c8e8, fogNear: 70, fogFar: 380,
     hemiSky: 0xbfe3ff, hemiGround: 0x4a6b3a, hemiInt: 1.0,
-    sunColor: 0xfff1da, sunInt: 1.0, grass: 0x2f9e44, night: 0 },
-  { name: "Night",
+    sunColor: 0xfff1da, sunInt: 1.0, grass: 0x2f9e44 },
+  { name: "Desert", scape: "desert", night: 0,
+    sky: 0xf2c879, fogNear: 95, fogFar: 440,            // warm haze, long sightlines
+    hemiSky: 0xffe6b0, hemiGround: 0x9c6b3f, hemiInt: 1.05,
+    sunColor: 0xfff0d0, sunInt: 1.2, grass: 0xc9a063 },  // sandy ground
+  { name: "City", scape: "city", night: 0.5,
+    sky: 0x3b3552, fogNear: 60, fogFar: 320,             // dusk over the skyline
+    hemiSky: 0x7a7ba6, hemiGround: 0x22232c, hemiInt: 0.82,
+    sunColor: 0xffb070, sunInt: 0.75, grass: 0x33343d },  // asphalt/concrete
+  { name: "Neon Paradise", scape: "neon", night: 1,
+    sky: 0x0a0618, fogNear: 48, fogFar: 300,             // dark, lit by glow
+    hemiSky: 0x3a1f6b, hemiGround: 0x0a0618, hemiInt: 0.5,
+    sunColor: 0xb070ff, sunInt: 0.55, grass: 0x140b26 },
+  { name: "Plains", scape: "plains", night: 1,           // night drive back toward dawn
     sky: 0x050811, fogNear: 48, fogFar: 290,
     hemiSky: 0x2b3a64, hemiGround: 0x06080f, hemiInt: 0.6,
-    sunColor: 0xaec2ff, sunInt: 0.85, grass: 0x10331e, night: 1 },
+    sunColor: 0xaec2ff, sunInt: 0.85, grass: 0x10331e },
 ];
 
 let traffic = [];
@@ -863,18 +879,59 @@ function updateLaneChange(car) {
 }
 
 // ---- Roadside scenery ----
+// Each region's roadside palette: prop types with relative weights. The scape
+// is picked from the biome ring at the spawn distance (scapeAt), so the props
+// match the ground they land on as the world cycles through regions.
+const SCAPES = {
+  plains: [["tree", 78], ["sign", 22]],
+  desert: [["cactus", 60], ["rock", 28], ["sign", 12]],
+  city:   [["building", 56], ["streetlight", 30], ["sign", 14]],
+  neon:   [["neonbuild", 54], ["streetlight", 26], ["neonsign", 20]],
+};
+function pickType(scape) {
+  const table = SCAPES[scape] || SCAPES.plains;
+  let total = 0; for (const e of table) total += e[1];
+  let r = Math.random() * total;
+  for (const [type, w] of table) { if ((r -= w) < 0) return type; }
+  return table[0][0];
+}
+
 function spawnScenery(z) {
   const side = Math.random() < 0.5 ? -1 : 1;
-  const type = Math.random() < 0.78 ? "tree" : "sign";
-  // place just beyond the road edge (lx = ±1); trees can sit further out
-  const lx = side * (1.15 + Math.random() * (type === "tree" ? 0.8 : 0.25));
-  scenery.push({
-    z,
-    lx,
-    type,
+  const scape = scapeAt(z / DIST_DIV);
+  const type = pickType(scape);
+  const o = {
+    z, type,
     sizeVar: 0.8 + Math.random() * 0.5,
     color: SIGN_COLORS[Math.floor(Math.random() * SIGN_COLORS.length)],
-  });
+    rot: Math.random() * Math.PI * 2,   // default: free spin (trees/cactus/rocks)
+  };
+  switch (type) {
+    case "building":
+    case "neonbuild": {
+      // Footprint + height in world units; placed so the inner face clears the
+      // asphalt (worldX = lx*ROAD_HALF_W), and pushed a little further out.
+      o.w = 6 + Math.random() * 8;
+      o.d = 6 + Math.random() * 8;
+      o.h = (type === "neonbuild" ? 7 : 9) + Math.random() * (type === "neonbuild" ? 22 : 32);
+      o.colorIdx = Math.floor(Math.random() * 5);
+      o.lx = side * ((ROAD_HALF_W + 1 + o.w / 2) / ROAD_HALF_W + Math.random() * 0.7);
+      o.rot = (Math.random() - 0.5) * 0.4;   // slight yaw jitter, roughly road-aligned
+      break;
+    }
+    case "streetlight":
+      o.lx = side * 1.12;                    // hug the verge; the arm reaches over the road
+      o.rot = side < 0 ? 0 : Math.PI;        // arm (+x local) points toward road center
+      break;
+    case "sign":
+    case "neonsign":
+      o.lx = side * (1.15 + Math.random() * 0.25);
+      o.rot = side < 0 ? 0.3 : -0.3;         // angle the board toward the driver
+      break;
+    default: // tree / cactus / rock
+      o.lx = side * (1.15 + Math.random() * 0.8);
+  }
+  scenery.push(o);
 }
 
 // Keep the roadside populated ahead of the player; recycle what's passed.
@@ -1089,6 +1146,11 @@ const _paintMats = new Map();
 const _signMats = new Map();
 let _matGlass, _matTire, _matHead, _matTail, _matShadow, _matTrunk, _matLeaf, _matPost, _matSilhouette, _matTrailer;
 let _matBodyDark, _matChrome; // rocker/bumper cladding + chrome trim (grille, hubs)
+// Region scenery: cactus/rock (desert), building + glowing windows (city),
+// street lamp head (city/neon), dark neon-district body, and a small palette of
+// MeshBasic neon colours (unlit + fogged, so they read as pure glow in the dark).
+let _matCactus, _matRock, _matWindow, _matLamp, _matNeonBody;
+let _neonMats = [];
 const _matBlinker = new THREE.MeshBasicMaterial({ color: 0xffae2b }); // bright amber, blinks via visibility
 
 function initSharedAssets() {
@@ -1121,6 +1183,15 @@ function initSharedAssets() {
   _geo.busStripe    = new THREE.BoxGeometry(2.14, 0.55, 5.4);
   _geo.bigWheel     = new THREE.CylinderGeometry(0.5, 0.5, 0.4, 16);
   _geo.blinker      = new THREE.BoxGeometry(0.18, 0.16, 0.18);
+  // Region scenery (desert / city / neon). Buildings are a unit cube scaled per
+  // instance; lamp + neon parts are scaled too, so a handful of geos cover all.
+  _geo.cactusBody = new THREE.CylinderGeometry(0.42, 0.58, 3.2, 8);
+  _geo.cactusArm  = new THREE.CylinderGeometry(0.26, 0.26, 1.3, 7);
+  _geo.rock       = new THREE.DodecahedronGeometry(1.2, 0);
+  _geo.building   = new THREE.BoxGeometry(1, 1, 1);
+  _geo.lampArm    = new THREE.BoxGeometry(2.0, 0.13, 0.13);
+  _geo.lampHead   = new THREE.BoxGeometry(0.5, 0.2, 0.5);
+  _geo.neonBar    = new THREE.BoxGeometry(1, 1, 1);   // scaled into stripes/signs
 
   _matGlass  = new THREE.MeshStandardMaterial({ color: 0x10141b, metalness: 0.3, roughness: 0.12 });
   _matTire   = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.85 });
@@ -1134,6 +1205,23 @@ function initSharedAssets() {
   _matTrailer = new THREE.MeshStandardMaterial({ color: 0xdfe3e8, roughness: 0.7, metalness: 0.1 });
   _matBodyDark = new THREE.MeshStandardMaterial({ color: 0x15171c, roughness: 0.6, metalness: 0.3 });
   _matChrome   = new THREE.MeshStandardMaterial({ color: 0xb9c1cd, roughness: 0.28, metalness: 0.9 });
+
+  // Region scenery materials (all shared, so a whole skyline draws in a few calls).
+  _matCactus   = new THREE.MeshStandardMaterial({ color: 0x4f7d3a, roughness: 1, flatShading: true });
+  _matRock     = new THREE.MeshStandardMaterial({ color: 0xb08a5a, roughness: 1, flatShading: true });
+  _matNeonBody = new THREE.MeshStandardMaterial({ color: 0x0c0a16, roughness: 0.5, metalness: 0.4 });
+  // Lamp head: emissive box; intensity is ramped by nightFactor in applyBiome.
+  _matLamp     = new THREE.MeshStandardMaterial({ color: 0xfff2cc, emissive: 0xffe9a0, emissiveIntensity: 0.25, roughness: 0.5 });
+  // Building wall: a tiling window texture used as BOTH colour map and emissive
+  // map, so windows are visible by day and light up at night (emissiveIntensity
+  // tracks nightFactor). Mild UV stretch on tall blocks is invisible at speed.
+  const winTex = makeWindowTexture();
+  _matWindow   = new THREE.MeshStandardMaterial({
+    map: winTex, emissiveMap: winTex, emissive: 0xfff0c0, emissiveIntensity: 0.1,
+    color: 0x70788a, roughness: 0.85,
+  });
+  _neonMats = [0xff3aa5, 0x21e6ff, 0x9d4dff, 0x4dff88, 0xffc23d]
+    .map((c) => new THREE.MeshBasicMaterial({ color: c }));
 
   // --- Pre-merged vehicle parts -------------------------------------------
   // A vehicle's shape is colour-independent, so we bake each material's panels
@@ -1255,6 +1343,24 @@ function buildVehicle(o) {
   return buildProceduralCar(o.color);
 }
 
+// A tiling wall texture: dark concrete with a grid of windows, ~half of them
+// lit. Used as both colour and emissive map so windows show by day and glow at
+// night. One shared canvas -> every building in a city reuses it for free.
+function makeWindowTexture() {
+  const c = document.createElement("canvas"); c.width = 64; c.height = 96;
+  const x = c.getContext("2d");
+  x.fillStyle = "#0c0f16"; x.fillRect(0, 0, 64, 96);
+  for (let yy = 6; yy < 90; yy += 11)
+    for (let xx = 6; xx < 58; xx += 13) {
+      x.fillStyle = Math.random() < 0.55 ? "#ffe6a0" : "#161d2b"; // lit vs dark pane
+      x.fillRect(xx, yy, 8, 7);
+    }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 5);
+  return tex;
+}
+
 function buildTree() {
   const g = new THREE.Group();
   const trunk = new THREE.Mesh(_geo.trunk, _matTrunk); trunk.position.y = 1.1; g.add(trunk);
@@ -1267,10 +1373,89 @@ function buildSign(color) {
   const board = new THREE.Mesh(_geo.sign, signMat(color)); board.position.y = 3.1; g.add(board);
   return g;
 }
+// --- Desert -------------------------------------------------------------
+function buildCactus() {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(_geo.cactusBody, _matCactus); body.position.y = 1.6; g.add(body);
+  const arms = Math.floor(Math.random() * 3); // 0-2 arms, alternating sides
+  for (let i = 0; i < arms; i++) {
+    const side = i % 2 === 0 ? 1 : -1;
+    const arm = new THREE.Mesh(_geo.cactusArm, _matCactus);
+    arm.position.set(side * 0.45, 1.5 + Math.random() * 0.7, 0);
+    arm.rotation.z = side * (0.5 + Math.random() * 0.3);
+    g.add(arm);
+  }
+  return g;
+}
+function buildRock() {
+  const g = new THREE.Group();
+  const r = new THREE.Mesh(_geo.rock, _matRock);
+  r.position.y = 0.6; r.scale.set(1, 0.6 + Math.random() * 0.5, 1);
+  r.rotation.y = Math.random() * Math.PI;
+  g.add(r);
+  return g;
+}
+// --- City ---------------------------------------------------------------
+function buildBuilding(o) {
+  const g = new THREE.Group();
+  const b = new THREE.Mesh(_geo.building, _matWindow);
+  b.scale.set(o.w, o.h, o.d); b.position.y = o.h / 2; g.add(b);
+  const cap = new THREE.Mesh(_geo.building, _matBodyDark); // flat roof slab
+  cap.scale.set(o.w * 0.96, 0.6, o.d * 0.96); cap.position.y = o.h + 0.3; g.add(cap);
+  return g;
+}
+function buildStreetlight() {
+  const g = new THREE.Group();
+  const post = new THREE.Mesh(_geo.post, _matPost);
+  post.scale.y = 2.2; post.position.y = 3.3; g.add(post);   // post geo is 3 tall
+  const arm = new THREE.Mesh(_geo.lampArm, _matPost);
+  arm.position.set(1.0, 6.4, 0); g.add(arm);                // reaches over the road (+x)
+  const head = new THREE.Mesh(_geo.lampHead, _matLamp);
+  head.position.set(1.9, 6.3, 0); g.add(head);
+  return g;
+}
+// --- Neon Paradise ------------------------------------------------------
+function buildNeonBuilding(o) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(_geo.building, _matNeonBody);
+  body.scale.set(o.w, o.h, o.d); body.position.y = o.h / 2; g.add(body);
+  const neon = _neonMats[o.colorIdx];
+  for (const sx of [-1, 1]) {                  // glowing vertical corner edges
+    const strip = new THREE.Mesh(_geo.neonBar, neon);
+    strip.scale.set(0.2, o.h * 0.92, 0.2);
+    strip.position.set(sx * o.w / 2, o.h / 2, o.d / 2);
+    g.add(strip);
+  }
+  const bands = 2 + Math.floor(Math.random() * 2); // horizontal glow bands
+  for (let i = 0; i < bands; i++) {
+    const band = new THREE.Mesh(_geo.neonBar, _neonMats[(o.colorIdx + 1 + i) % _neonMats.length]);
+    band.scale.set(o.w * 1.02, 0.22, 0.12);
+    band.position.set(0, o.h * (0.28 + 0.46 * (i + 1) / (bands + 1)), o.d / 2 + 0.06);
+    g.add(band);
+  }
+  return g;
+}
+function buildNeonSign(o) {
+  const g = new THREE.Group();
+  const post = new THREE.Mesh(_geo.post, _matNeonBody);
+  post.scale.y = 1.3; post.position.y = 2.0; g.add(post);
+  const board = new THREE.Mesh(_geo.neonBar, _neonMats[o.colorIdx]);
+  board.scale.set(2.6, 1.3, 0.16); board.position.y = 4.2; g.add(board);
+  const inner = new THREE.Mesh(_geo.neonBar, _matNeonBody); // dark cut -> framed look
+  inner.scale.set(2.1, 0.8, 0.2); inner.position.set(0, 4.2, 0.02); g.add(inner);
+  return g;
+}
 function makeScenery(o) {
-  const m = o.type === "tree" ? buildTree() : buildSign(o.color);
-  m.scale.setScalar(o.sizeVar * 1.5);
-  return m;
+  switch (o.type) {
+    case "sign":        { const m = buildSign(o.color); m.scale.setScalar(o.sizeVar * 1.5); return m; }
+    case "cactus":      { const m = buildCactus();      m.scale.setScalar(o.sizeVar * 1.2); return m; }
+    case "rock":        { const m = buildRock();        m.scale.setScalar(o.sizeVar * 1.7); return m; }
+    case "building":    return buildBuilding(o);
+    case "streetlight": return buildStreetlight();
+    case "neonbuild":   return buildNeonBuilding(o);
+    case "neonsign":    return buildNeonSign(o);
+    default:            { const m = buildTree(); m.scale.setScalar(o.sizeVar * 1.5); return m; }
+  }
 }
 
 // Asphalt + lane markings baked into a tiling texture that scrolls with travel.
@@ -1448,23 +1633,32 @@ let nightFactor = 0;          // 0 day .. 1 night; drives headlight + street-lam
 let biomeShown = null;        // dominant biome currently named in the HUD
 const smoothstep = (t) => t * t * (3 - 2 * t);
 
-// Map progress through one day (u: 0..1) to a night factor (0 day .. 1 night).
-// Night owns the long middle stretch; day is a short window with quick dusk/dawn.
-function nightFactorAt(u) {
-  const duskA = 0.12, duskB = 0.34, dawnA = 0.80, dawnB = 0.99;
-  if (u < duskA) return 0;                                          // day
-  if (u < duskB) return smoothstep((u - duskA) / (duskB - duskA));  // dusk -> night
-  if (u < dawnA) return 1;                                          // night (long)
-  if (u < dawnB) return 1 - smoothstep((u - dawnA) / (dawnB - dawnA)); // dawn -> day
-  return 0;
+// Walk the region ring. Progress p (0..1) spans the whole lap; each region owns
+// an equal slice. Inside a slice we HOLD on that region (so it reads clearly),
+// then blend into the next one over the slice's tail. Returns the two region
+// indices to mix and the blend t (0 = pure a, 1 = pure b).
+const RING_HOLD = 0.6; // fraction of each slice spent fully in the region
+function ringSample(p) {
+  const n = BIOMES.length;
+  const seg = ((p % 1 + 1) % 1) * n;
+  const i = Math.floor(seg) % n;
+  const f = seg - Math.floor(seg);                 // 0..1 within the slice
+  const t = f < RING_HOLD ? 0 : smoothstep((f - RING_HOLD) / (1 - RING_HOLD));
+  return { a: i, b: (i + 1) % n, t };
 }
 
-// Sample the day/night curve at the given distance (km) and push the blended
+// The roadside-prop palette at a given distance (km) — picked by the dominant
+// region there, so scenery spawned far ahead matches the ground it lands on.
+function scapeAt(km) {
+  const { a, b, t } = ringSample(km / BIOME_CYCLE_KM);
+  return (t < 0.5 ? BIOMES[a] : BIOMES[b]).scape;
+}
+
+// Sample the region ring at the given distance (km) and push the blended
 // environment onto the scene, lights, grass and shared car/lamp materials.
 function applyBiome(km) {
-  const u = ((km / BIOME_CYCLE_KM) % 1 + 1) % 1; // progress through one day, 0..1
-  const t = nightFactorAt(u);                    // 0 = full day, 1 = full night
-  const a = BIOMES[0], b = BIOMES[BIOMES.length - 1]; // Day -> Night
+  const { a: ia, b: ib, t } = ringSample(km / BIOME_CYCLE_KM);
+  const a = BIOMES[ia], b = BIOMES[ib];
   const mix = (ka, kb) => ka + (kb - ka) * t;
 
   _biomeSky.set(a.sky).lerp(_biomeTmp.set(b.sky), t);
@@ -1482,9 +1676,12 @@ function applyBiome(km) {
 
   grassMat.color.set(a.grass).lerp(_biomeTmp.set(b.grass), t);
 
-  nightFactor = t;
+  nightFactor = mix(a.night, b.night);
   _matHead.emissiveIntensity = 0.9 + nightFactor * 1.7; // headlights burn brighter after dark
   _matTail.emissiveIntensity = 0.9 + nightFactor * 1.1;
+  // City/neon windows + street lamps catch fire as the light fails.
+  if (_matWindow) _matWindow.emissiveIntensity = 0.1 + nightFactor * 1.7;
+  if (_matLamp)   _matLamp.emissiveIntensity   = 0.25 + nightFactor * 2.4;
 
   const dom = (t < 0.5 ? a : b).name;
   if (dom !== biomeShown) showBiome(dom);
@@ -1511,7 +1708,7 @@ function render() {
   reconcile(trafficGroup, traffic, buildVehicle, placeTraffic);
   reconcile(sceneryGroup, scenery, makeScenery, (o) => {
     placeOnRoad(o);
-    o.mesh.rotation.y = o.lx < 0 ? 0.3 : -0.3;
+    o.mesh.rotation.y = o.rot;   // per-prop orientation, set at spawn (see spawnScenery)
   });
 
   if (playerMesh) {
