@@ -415,6 +415,9 @@ const state = {
   whiteout: 0,      // crash blowout: white flash + crack lines on the impact frame
   slowmoT: 0,       // ms of bullet-time left after an exceptional pass (real time)
   slowmoCD: 0,      // ms until another slow-mo can trigger
+  shield: false,    // a held shield that auto-saves the next fatal hit
+  shieldCharge: 0,  // 0..1 progress toward the next shield (from near-misses)
+  invuln: 0,        // frames of phase-through after a shield save
   // combo + run stats
   combo: 0,
   comboTimer: 0,    // frames remaining before the combo lapses
@@ -433,6 +436,13 @@ const SLOWMO_MS = 320;      // how long the dip lasts
 const SLOWMO_CD = 1500;     // minimum gap between slow-mos
 const SLOWMO_SCALE = 0.38;  // time scale at the peak of the dip (0 = frozen)
 const SLOWMO_CLOSE = 0.9;   // closeness above this counts as "exceptional"
+
+// Shield: near-misses charge it; one held shield auto-eats the next fatal hit,
+// then you phase through traffic for a moment. Earned through bravery, held one
+// at a time, so an unshielded mistake still ends the run.
+const SHIELD_GAIN_BASE = 0.03;   // charge per near-miss, regardless of closeness
+const SHIELD_GAIN_CLOSE = 0.07;  // extra charge scaled by how close it was
+const SHIELD_INVULN = 90;        // frames (~1.5s) of phasing after a save
 const DIST_DIV = 16000;     // game-units per displayed "km"
 const CREDIT_RATE = 0.125;  // credits earned = score x this (score stays the bragging number)
 
@@ -723,6 +733,10 @@ function audioSlowmo() {
   g.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
   o.connect(g).connect(audio.master); o.start(t); o.stop(t + 0.36);
 }
+// Bright ascending shimmer when a shield saves you (protective, not a crash).
+function audioShield() { ensureAudio(); [523, 784, 1047, 1568].forEach((f, i) => uiTone(f, i * 0.05, 0.5, "triangle", 0.09)); }
+// A clean two-note "armed" ding when a shield finishes charging.
+function audioShieldReady() { ensureAudio(); uiTone(880, 0, 0.12, "sine", 0.08); uiTone(1320, 0.09, 0.16, "sine", 0.07); }
 function audioCoin()   { ensureAudio(); uiTone(784, 0, 0.08, "triangle", 0.13); uiTone(1175, 0.06, 0.10, "triangle", 0.13); uiTone(1568, 0.12, 0.16, "sine", 0.10); }
 function audioUnlock() { ensureAudio(); [523, 659, 784, 1047, 1319].forEach((f, i) => uiTone(f, i * 0.08, 0.45, "triangle", 0.11)); }
 function audioDenied() { ensureAudio(); uiTone(150, 0, 0.14, "square", 0.08); uiTone(110, 0.07, 0.18, "square", 0.08); }
@@ -1057,6 +1071,7 @@ function update() {
 
   // Combo lapses if you go too long without landing a near miss.
   if (state.comboTimer > 0 && --state.comboTimer === 0) { state.combo = 0; state.mult = 1; }
+  if (state.invuln > 0) state.invuln--; // post-shield phase-through winds down
 
   // Passes/crashes happen at YOUR plane (where you see them alongside).
   const speedFactor = state.speed / state.maxSpeed;
@@ -1070,9 +1085,11 @@ function update() {
       const pan = clamp(car.lx - state.playerX, -1, 1);
 
       const tol = car.halfW;                    // heavies are wider, so contact sooner
-      if (lateral < HARD_TOLERANCE + tol) {     // near head-on -> crash
-        gameOver();
-        return;
+      if (state.invuln > 0 && lateral < LANE_TOLERANCE + tol) {
+        // Phasing through traffic during post-shield invulnerability: no contact.
+      } else if (lateral < HARD_TOLERANCE + tol) { // near head-on
+        if (state.shield) { shieldSave(pan); }  // a held shield eats the hit
+        else { gameOver(); return; }            // otherwise the run ends
       } else if (lateral < LANE_TOLERANCE + tol) { // sideswipe -> survive, but punished
         sideswipe(pan);
       } else {                                  // clean pass
@@ -1099,6 +1116,16 @@ function update() {
           if (exceptional && state.slowmoCD <= 0) {
             state.slowmoT = SLOWMO_MS; state.slowmoCD = SLOWMO_CD;
             audioSlowmo();
+          }
+          // Near-misses charge a shield (closer = more); fills to one held shield
+          // that auto-saves you from the next fatal hit. Hold one at a time.
+          if (!state.shield) {
+            state.shieldCharge += SHIELD_GAIN_BASE + closeness * SHIELD_GAIN_CLOSE;
+            if (state.shieldCharge >= 1) {
+              state.shieldCharge = 0; state.shield = true;
+              addPopup(sp.x, sp.y - 26, "SHIELD READY", "#38e1ff", true);
+              audioShieldReady();
+            }
           }
           if (car.dir < 0 && closeness > 0.4) {
             addPopup(sp.x, sp.y, (exceptional ? "SO CLOSE! " : "ONCOMING! ") + tag, "#ff6b6b", true);
@@ -1155,6 +1182,23 @@ function sideswipe(pan) {
   audioScrape(pan);
 }
 
+// A held shield eats an otherwise-fatal hit: you survive, but pay for it
+// (speed dump + combo reset) and phase through traffic for ~1.5s while the
+// shield "reforms". Sold with bullet-time, a cyan burst, shake and a chime.
+function shieldSave(pan) {
+  state.shield = false;
+  state.invuln = SHIELD_INVULN;
+  state.speed *= 0.55;
+  state.combo = 0; state.mult = 1; state.comboTimer = 0;
+  state.shake = Math.max(state.shake, 1.3);
+  state.kick += pan * 1.4;
+  state.slowmoT = SLOWMO_MS; state.slowmoCD = SLOWMO_CD; // dramatic beat (cyan time-bend)
+  const c = worldToScreen(worldX(state.playerX), 1.4, 0);
+  addPopup(c.x, c.y - 20, "SHIELD!", "#38e1ff", true);
+  addRing(c.x, c.y, 1, "56,225,255");
+  audioShield();
+}
+
 // ---- HUD ----
 let hud = null;
 function cacheHUD() {
@@ -1167,6 +1211,8 @@ function cacheHUD() {
     combo: document.getElementById("combo"),
     comboMult: document.getElementById("combo-mult"),
     comboFill: document.getElementById("combo-fill"),
+    shield: document.getElementById("shield"),
+    shieldFill: document.getElementById("shield-fill"),
   };
 }
 function updateHUD() {
@@ -1182,6 +1228,10 @@ function updateHUD() {
     hud.comboFill.style.width = (state.comboTimer / COMBO_WINDOW * 100) + "%";
   } else {
     hud.combo.classList.remove("on");
+  }
+  if (hud.shield) {
+    hud.shield.classList.toggle("armed", state.shield);
+    hud.shieldFill.style.width = (state.shield ? 100 : state.shieldCharge * 100) + "%";
   }
 }
 
@@ -1854,6 +1904,8 @@ function render() {
     playerMesh.position.set(worldX(state.playerX), 0, 0);
     playerMesh.rotation.z = -state.playerVX * 6; // lean into the steering
     playerMesh.rotation.y = -state.playerVX * 3; // slight yaw
+    // Blink while phasing through traffic after a shield save.
+    playerMesh.visible = state.invuln > 0 ? Math.floor(performance.now() / 70) % 2 === 0 : true;
   }
 
   // Speed sells itself: FOV widens with pace, the camera shakes a touch at
@@ -2146,6 +2198,7 @@ function resetRunState() {
   state.maxCombo = 0; state.passed = 0; state.topSpeed = 0;
   state.kick = 0; state.flashHue = 0; state.whiteout = 0;
   state.slowmoT = 0; state.slowmoCD = 0;
+  state.shield = false; state.shieldCharge = 0; state.invuln = 0;
   traffic = [];
   scenery = [];
   popups = [];
