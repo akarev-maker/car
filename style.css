@@ -12,13 +12,16 @@ body {
   justify-content: center;
   align-items: center;
   min-height: 100vh;
+  min-height: 100dvh; /* dvh = visible viewport, so we sit above the mobile URL bar */
   overflow: hidden;
 }
 
 #game-wrapper {
   position: relative;
-  /* 16:9, scaled to fit whichever dimension is the constraint */
+  /* 16:9, scaled to fit whichever dimension is the constraint. dvh keeps the box
+     inside the *visible* area so nothing hides under the mobile browser banner. */
   width: min(96vw, 96vh * 16 / 9);
+  width: min(96vw, 96dvh * 16 / 9);
   aspect-ratio: 16 / 9;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
   border-radius: 8px;
@@ -147,9 +150,15 @@ body.playing #biome { display: block; }
   display: flex;
   flex-direction: column;
   justify-content: center;
+  /* "safe center" keeps content centered when it fits, but falls back to
+     top-aligned (not clipped) when it's taller than the box — so on short
+     phone-landscape screens you can scroll down to reach buttons like Play. */
+  justify-content: safe center;
   align-items: center;
   text-align: center;
   padding: 24px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   z-index: 10;
 }
 
@@ -821,8 +830,6 @@ body.touch .joystick {
   margin: 16px auto 0;
   width: 100%;
   max-width: 360px;
-  max-height: 42vh;
-  overflow-y: auto;
   text-align: left;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.1);
