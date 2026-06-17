@@ -10,8 +10,8 @@ import {
   credCost, fmt, getCar, getEnv, ico, rankFor, upgradeCost
 } from "./config.js";
 import {
-  CHALLENGES, CHAL_FIELDS, ZERO_R, activeCar, addBank, bank, career, careerRank, chalDesc,
-  chalDone, chalValue,
+  CHALLENGES, CHAL_FIELDS, ZERO_R, activeCar, addBank, bank, careerRank, chalDesc,
+  chalDone, chalValue, checkChallengesLive, commitCareer,
   effStats, goalTmpl, goals, goalsJustDone, goalsPanelHTML, highScore, input, keys, lastEarned,
   loadProgress, muted, owned, ownedEnvs, quality, saveProgress, selectedCar, selectedEnv,
   setActiveCar, setActiveStats, setGoalsJustDone, setHighScore, setLastEarned, setQuality,
@@ -339,21 +339,13 @@ function endRun(crashed, toHome) {
   addBank(lastEarned);
   const isHi = state.score > highScore;
   if (isHi) setHighScore(state.score);
-  // Roll this run into the lifetime career totals (the progression ladder grinds
-  // against these). Sums accumulate; best* keep your single-run records.
-  career.runs += 1;
-  career.dist += state.position / DIST_DIV;
-  career.passed += state.passed;
-  career.scoreTotal += state.score;
-  career.slowmos += state.runSlowmos;
-  career.shields += state.runShields;
-  career.bestScore = Math.max(career.bestScore, state.score);
-  career.bestPassed = Math.max(career.bestPassed, state.passed);
-  career.bestDist = Math.max(career.bestDist, state.position / DIST_DIV);
-  career.bestCombo = Math.max(career.bestCombo, state.maxCombo);
-  career.bestSpeed = Math.max(career.bestSpeed, state.topSpeed);
-  career.bestSlowmos = Math.max(career.bestSlowmos, state.runSlowmos);
+  // Roll this run into the lifetime career totals (the ladder grinds against
+  // these), then do a final authoritative goal + challenge check. The per-step
+  // live checks are throttled and the fatal frame skips its own check on a crash,
+  // so this is what reliably awards end-of-run and run-based challenges.
+  commitCareer();
   setGoalsJustDone(trackGoals()); // may add goal rewards to the bank too
+  checkChallengesLive();          // catches challenges completed on the final frame
   saveProgress();
 
   // Quitting (Esc) banks the run and drops straight to the home menu; a crash
@@ -419,13 +411,14 @@ function rollNumber(el, to, dur = 650) {
   if (!el) return;
   const from = Number(el.dataset.val || 0);
   el.dataset.val = to;
+  if (el._rollRAF) cancelAnimationFrame(el._rollRAF); // don't stack chains on rapid updates
   if (from === to) { el.textContent = fmt(to); return; }
   const start = performance.now();
   (function step(now) {
     const k = Math.min(1, (now - start) / dur);
     const e = 1 - Math.pow(1 - k, 3); // easeOutCubic
     el.textContent = fmt(from + (to - from) * e);
-    if (k < 1) requestAnimationFrame(step);
+    if (k < 1) el._rollRAF = requestAnimationFrame(step);
   })(performance.now());
 }
 

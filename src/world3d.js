@@ -29,6 +29,7 @@ export let scenery = [];
 export let popups = [];
 export let rings = [];
 export function resetEntities() { traffic = []; scenery = []; popups = []; rings = []; }
+let _liveTick = 0; // throttles the mid-run goal/challenge checks (see update())
 
 // ---- Traffic ----
 export function pickKind(dir) {
@@ -110,14 +111,17 @@ export function addRing(x, y, closeness, color) {
 
 // Car-following: within each lane, a faster car can't drive through the car
 // ahead. It closes the gap, then matches the leader's speed (like real traffic).
+const _followGroups = new Map(); // key -> car list; reused each frame (arrays kept, just cleared)
 export function resolveTrafficFollowing() {
-  const lanes = new Map();
+  for (const list of _followGroups.values()) list.length = 0; // clear without freeing the arrays
   for (const car of traffic) {
     const key = car.dir + ":" + car.lane; // each carriageway lane queues on its own
-    if (!lanes.has(key)) lanes.set(key, []);
-    lanes.get(key).push(car);
+    let list = _followGroups.get(key);
+    if (!list) { list = []; _followGroups.set(key, list); }
+    list.push(car);
   }
-  for (const list of lanes.values()) {
+  for (const list of _followGroups.values()) {
+    if (list.length < 2) continue;
     // Sort back -> front along the direction of travel (forward = +z, oncoming = -z).
     list.sort((a, b) => (a.z - b.z) * a.dir);
     for (let i = list.length - 2; i >= 0; i--) {
@@ -397,8 +401,10 @@ export function update() {
   state.shake *= 0.85;
   state.kick *= 0.8;
   state.whiteout *= 0.85;
-  checkGoalsLive(); // celebrate the moment a daily goal is met, mid-run
-  checkChallengesLive(); // and progression challenges
+  // Mid-run celebration toasts only — a few frames' latency is imperceptible, so
+  // keep these off the per-step hot path (update can run up to 5x per frame).
+  // endRun does a final authoritative check, so nothing is missed at the finish.
+  if (++_liveTick % 12 === 0) { checkGoalsLive(); checkChallengesLive(); }
   // NOTE: HUD + engine audio are presentation, not physics. They run once per
   // rendered frame from loop(), never inside this (possibly multi-step) update.
 }

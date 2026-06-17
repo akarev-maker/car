@@ -333,6 +333,7 @@ export function goalsPanelHTML() {
   ensureGoals();
   const row = (it) => {
     const t = goalTmpl(it.id);
+    if (!t) return ""; // a saved goal whose template no longer exists (skip, don't crash)
     const pct = Math.round(clamp(it.progress / it.target, 0, 1) * 100);
     return `<div class="goal ${it.done ? "done" : ""}">
       <div class="goal-top"><span class="goal-text">${t.fmt(it.target)}</span>` +
@@ -359,6 +360,7 @@ export function showToast(inner, cls = "") {
 }
 export function goalToast(it) {
   const t = goalTmpl(it.id);
+  if (!t) return;
   showToast(
     `<span class="toast-ico">${ico("ico-check")}</span>` +
     `<div class="toast-body"><b>Goal complete</b><span>${t.fmt(it.target)}</span></div>` +
@@ -394,7 +396,7 @@ export const CHAL_FIELDS = {
   runCombo:   { agg: "max", career: "bestCombo",   run: (r) => r.maxCombo, fmt: (v) => fmt(v) },
   runSpeed:   { agg: "max", career: "bestSpeed",   run: (r) => r.topSpeed, fmt: (v) => spd(v) + " " + spdLabel() },
   runSlowmos: { agg: "max", career: "bestSlowmos", run: (r) => r.slowmos,  fmt: (v) => fmt(v) },
-  totRuns:    { agg: "sum", career: "runs",        run: ()  => (state.running ? 1 : 0), fmt: (v) => fmt(v) },
+  totRuns:    { agg: "sum", career: "runs",        run: ()  => 0, fmt: (v) => fmt(v) }, // career.runs already counts the run; endRun commits then re-checks
   totDist:    { agg: "sum", career: "dist",        run: (r) => r.distKm,   fmt: (v) => fmt(Math.floor(v)) + " km" },
   totPassed:  { agg: "sum", career: "passed",      run: (r) => r.passed,   fmt: (v) => fmt(v) },
   totScore:   { agg: "sum", career: "scoreTotal",  run: (r) => r.score,    fmt: (v) => fmt(v) },
