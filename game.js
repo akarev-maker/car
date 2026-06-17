@@ -1390,7 +1390,7 @@ const MODEL_CFG = {
 const _geo = {};
 const _paintMats = new Map();
 const _signMats = new Map();
-let _matGlass, _matTire, _matHead, _matTail, _matShadow, _matTrunk, _matLeaf, _matPost, _matSilhouette, _matTrailer;
+let _matGlass, _matTire, _matHead, _matTail, _matPlayerTail, _matShadow, _matTrunk, _matLeaf, _matPost, _matSilhouette, _matTrailer;
 let _matBodyDark, _matChrome; // rocker/bumper cladding + chrome trim (grille, hubs)
 // Region scenery: cactus/rock (desert), building + glowing windows (city),
 // street lamp head (city/neon), dark neon-district body, and a small palette of
@@ -1398,6 +1398,106 @@ let _matBodyDark, _matChrome; // rocker/bumper cladding + chrome trim (grille, h
 let _matCactus, _matRock, _matWindow, _matLamp, _matNeonBody;
 let _neonMats = [];
 const _matBlinker = new THREE.MeshBasicMaterial({ color: 0xffae2b }); // bright amber, blinks via visibility
+
+// ---- Per-car silhouettes -------------------------------------------------
+// A car's body is composed from the shared base slabs at positions/scales given
+// by a "profile" (proportions: length, ride height, greenhouse shape, where the
+// cabin sits, hood vs deck split, stance width). Traffic shares DEFAULT_PROFILE,
+// baked once and cheap. The player + showroom car build their own per id, so the
+// roster reads as distinct shapes — a tall upright hatch, a long-hood fastback
+// muscle car, a cab-forward mid-engine hypercar — instead of one body in six
+// paints. Only ever one player + one showroom car exist, so the extra baked
+// geometry is essentially free (the same reasoning the tier aero already uses).
+const _gm4 = new THREE.Matrix4(), _gq = new THREE.Quaternion(), _ge = new THREE.Euler();
+const _gv = new THREE.Vector3(), _gsc = new THREE.Vector3();
+function _at(geo, pos = [0, 0, 0], rot = [0, 0, 0], scale = [1, 1, 1]) {
+  const c = geo.clone();
+  _ge.set(rot[0], rot[1], rot[2]); _gq.setFromEuler(_ge);
+  _gm4.compose(_gv.set(pos[0], pos[1], pos[2]), _gq, _gsc.set(scale[0], scale[1], scale[2]));
+  return c.applyMatrix4(_gm4);
+}
+const _RZ = [0, 0, Math.PI / 2]; // wheels lie on their side
+
+// Defaults reproduce the original shared body exactly, so traffic is unchanged.
+const DEFAULT_PROFILE = {
+  width: 1, lenZ: 1, bodyY: 0.62,
+  hoodZ: -1.42, hoodLen: 1, deckZ: 1.62, deckLen: 1,
+  cabinZ: 0.12, cabinLen: 1, roofY: 1.32, roofZ: 0.18, roofLen: 1,
+  bumperF: -2.12, bumperR: 2.12, wheelZ: 1.4,
+};
+// Only the silhouette-defining knobs are overridden per car (rest inherit).
+const CAR_PROFILES = {
+  // Short, tall, upright — stubby hatchback with a big greenhouse, tiny tail.
+  hatch:  { width: 0.95, lenZ: 0.86, hoodZ: -1.18, hoodLen: 0.78, deckZ: 1.34, deckLen: 0.55,
+            cabinZ: 0.30, cabinLen: 1.05, roofY: 1.40, roofZ: 0.34,
+            bumperF: -1.86, bumperR: 1.90, wheelZ: 1.24 },
+  // Balanced three-box sedan with a proper trunk — the all-rounder baseline.
+  sedan:  { lenZ: 1.0, deckZ: 1.66, deckLen: 1.05, roofY: 1.33, cabinZ: 0.20,
+            bumperF: -2.14, bumperR: 2.16, wheelZ: 1.42 },
+  // Long hood, cabin pushed back into a fastback, wide stance, low roof.
+  muscle: { width: 1.06, lenZ: 1.08, bodyY: 0.57, hoodZ: -1.64, hoodLen: 1.28, deckZ: 1.54, deckLen: 0.78,
+            cabinZ: 0.46, cabinLen: 0.96, roofY: 1.26, roofZ: 0.50, roofLen: 0.92,
+            bumperF: -2.36, bumperR: 2.18, wheelZ: 1.50 },
+  // Sleek, long, low grand tourer with a sweeping full-length greenhouse.
+  gt:     { width: 1.02, lenZ: 1.06, bodyY: 0.56, hoodZ: -1.54, hoodLen: 1.08, deckZ: 1.66, deckLen: 0.95,
+            cabinZ: 0.16, cabinLen: 1.12, roofY: 1.22, roofZ: 0.20, roofLen: 1.16,
+            bumperF: -2.22, bumperR: 2.22, wheelZ: 1.46 },
+  // Mid-engine wedge: cab-forward, short nose, long rear engine deck, low + wide.
+  super:  { width: 1.10, lenZ: 1.0, bodyY: 0.50, hoodZ: -1.30, hoodLen: 0.74, deckZ: 1.48, deckLen: 1.16,
+            cabinZ: -0.30, cabinLen: 0.84, roofY: 1.12, roofZ: -0.26, roofLen: 0.94,
+            bumperF: -2.12, bumperR: 2.24, wheelZ: 1.50 },
+  // Apex hypercar — the wedge taken to the extreme: longest, lowest, most raked.
+  velox:  { width: 1.12, lenZ: 1.04, bodyY: 0.46, hoodZ: -1.34, hoodLen: 0.72, deckZ: 1.54, deckLen: 1.24,
+            cabinZ: -0.42, cabinLen: 0.80, roofY: 1.06, roofZ: -0.36, roofLen: 0.92,
+            bumperF: -2.30, bumperR: 2.32, wheelZ: 1.54 },
+};
+const carProfile = (id) => Object.assign({}, DEFAULT_PROFILE, CAR_PROFILES[id]);
+
+// Bake one car's merged geometry set from a profile. Geometry tracks the profile
+// so every derived part (glass on the cabin, lamps on the bumpers, wheels on the
+// wheelbase) stays attached as proportions change. Returns one geometry per
+// material, exactly like the original shared set, so draw-call count is identical.
+function buildCarGeoSet(p) {
+  const W = p.width, merge = (parts) => mergeGeometries(parts, false);
+  const paint = merge([
+    _at(_geo.body,  [0, p.bodyY, 0],              [0, 0, 0], [W, 1, p.lenZ]),
+    _at(_geo.hood,  [0, p.bodyY + 0.18, p.hoodZ], [0, 0, 0], [W, 1, p.hoodLen]),
+    _at(_geo.deck,  [0, p.bodyY + 0.20, p.deckZ], [0, 0, 0], [W, 1, p.deckLen]),
+    _at(_geo.cabin, [0, p.bodyY + 0.42, p.cabinZ],[0, 0, 0], [W, 1, p.cabinLen]),
+    _at(_geo.roof,  [0, p.roofY, p.roofZ],        [0, 0, 0], [W, 1, p.roofLen]),
+  ]);
+  const dark = merge([
+    _at(_geo.skirt,   [0, 0.34, 0],            [0, 0, 0], [W, 1, p.lenZ]),
+    _at(_geo.bumper,  [0, 0.48, p.bumperF],    [0, 0, 0], [W, 1, 1]),
+    _at(_geo.bumper,  [0, 0.48, p.bumperR],    [0, 0, 0], [W, 1, 1]),
+    _at(_geo.spoiler, [0, 0.98, p.deckZ + 0.54]),
+  ]);
+  const glass = merge([
+    _at(_geo.glassF, [0, p.roofY - 0.16, p.cabinZ - 0.98 * p.cabinLen], [0.62, 0, 0],  [W, 1, 1]),
+    _at(_geo.glassR, [0, p.roofY - 0.14, p.cabinZ + 1.0 * p.cabinLen],  [-0.66, 0, 0], [W, 1, 1]),
+    _at(_geo.glassS, [ 0.81 * W, p.roofY - 0.20, p.cabinZ + 0.06], [0, 0, 0], [1, 1, p.cabinLen]),
+    _at(_geo.glassS, [-0.81 * W, p.roofY - 0.20, p.cabinZ + 0.06], [0, 0, 0], [1, 1, p.cabinLen]),
+  ]);
+  const wheelPts = [[0.94 * W, p.wheelZ], [-0.94 * W, p.wheelZ], [0.94 * W, -p.wheelZ], [-0.94 * W, -p.wheelZ]];
+  const wheels = [], hubs = [];
+  for (const [x, z] of wheelPts) {
+    wheels.push(_at(_geo.wheel, [x, 0.42, z], _RZ));
+    hubs.push(_at(_geo.hub, [x, 0.42, z], _RZ));
+  }
+  return {
+    profile: p,
+    paint, dark, glass,
+    wheels: merge(wheels),
+    chrome: merge([...hubs, _at(_geo.grille, [0, 0.66, p.bumperF - 0.12])]),
+    head:   merge([_at(_geo.light, [0.64 * W, 0.68, p.bumperF - 0.10]), _at(_geo.light, [-0.64 * W, 0.68, p.bumperF - 0.10])]),
+    tail:   merge([_at(_geo.light, [0.64 * W, 0.74, p.bumperR + 0.10]), _at(_geo.light, [-0.64 * W, 0.74, p.bumperR + 0.10])]),
+    blinkR: merge([_at(_geo.blinker, [0.95 * W, 0.74, p.bumperF + 0.12]), _at(_geo.blinker, [0.95 * W, 0.74, p.bumperR - 0.12])]),
+    blinkL: merge([_at(_geo.blinker, [-0.95 * W, 0.74, p.bumperF + 0.12]), _at(_geo.blinker, [-0.95 * W, 0.74, p.bumperR - 0.12])]),
+  };
+}
+let _defaultCarGeo = null;          // traffic body (DEFAULT_PROFILE), baked in initSharedAssets
+const _carGeoCache = {};            // id -> baked geo set for the player/showroom car
+const carGeoSet = (id) => _carGeoCache[id] || (_carGeoCache[id] = buildCarGeoSet(carProfile(id)));
 
 function initSharedAssets() {
   // Car body, sculpted from a few layered slabs (see buildProceduralCar).
@@ -1414,6 +1514,13 @@ function initSharedAssets() {
   _geo.grille  = new THREE.BoxGeometry(1.2, 0.22, 0.12);  // grille slab
   _geo.hub     = new THREE.CylinderGeometry(0.17, 0.17, 0.36, 12); // wheel hub cap
   _geo.spoiler = new THREE.BoxGeometry(1.66, 0.07, 0.34); // subtle rear lip
+  // Tier-scaling aero for player cars (added per-instance in buildPlayerCar; only
+  // ever one player + one showroom car, so the extra parts are essentially free).
+  _geo.rocker   = new THREE.BoxGeometry(0.07, 0.11, 2.7);  // side accent blade
+  _geo.splitter = new THREE.BoxGeometry(2.08, 0.06, 0.42); // front lip / splitter
+  _geo.wingUp   = new THREE.BoxGeometry(0.1, 0.52, 0.3);   // rear-wing upright
+  _geo.wingPln  = new THREE.BoxGeometry(1.72, 0.08, 0.52); // rear-wing plane
+  _geo.rimRing  = new THREE.CylinderGeometry(0.3, 0.3, 0.38, 16); // accent rim disc
   _geo.glass  = new THREE.BoxGeometry(1.74, 0.52, 1.72);  // (kept for the truck cab)
   _geo.wheel  = new THREE.CylinderGeometry(0.42, 0.42, 0.34, 18);
   _geo.light  = new THREE.BoxGeometry(0.42, 0.2, 0.12);
@@ -1439,10 +1546,13 @@ function initSharedAssets() {
   _geo.lampHead   = new THREE.BoxGeometry(0.5, 0.2, 0.5);
   _geo.neonBar    = new THREE.BoxGeometry(1, 1, 1);   // scaled into stripes/signs
 
-  _matGlass  = new THREE.MeshStandardMaterial({ color: 0x10141b, metalness: 0.3, roughness: 0.12 });
+  _matGlass  = new THREE.MeshStandardMaterial({ color: 0x0a0d14, metalness: 0.45, roughness: 0.07 });
   _matTire   = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.85 });
   _matHead   = new THREE.MeshStandardMaterial({ color: 0xfff4cc, emissive: 0xffe9a0, emissiveIntensity: 0.9, roughness: 0.4 });
   _matTail   = new THREE.MeshStandardMaterial({ color: 0x5a0000, emissive: 0xff2b2b, emissiveIntensity: 0.9, roughness: 0.4 });
+  // The player's own tail lights get a dedicated material so braking can flare
+  // them (a feedback channel from the chase cam) without touching traffic.
+  _matPlayerTail = new THREE.MeshStandardMaterial({ color: 0x5a0000, emissive: 0xff2b2b, emissiveIntensity: 0.9, roughness: 0.4 });
   _matShadow = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.32, depthWrite: false });
   _matTrunk  = new THREE.MeshStandardMaterial({ color: 0x5b3a21, roughness: 1 });
   _matLeaf   = new THREE.MeshStandardMaterial({ color: 0x2f8f3e, roughness: 1, flatShading: true });
@@ -1483,31 +1593,9 @@ function initSharedAssets() {
   const merge = (parts) => mergeGeometries(parts, false);
   const RZ = [0, 0, Math.PI / 2]; // wheels lie on their side
 
-  _geo.carPaint = merge([
-    at(_geo.body, [0, 0.62, 0]), at(_geo.hood, [0, 0.8, -1.42]),
-    at(_geo.deck, [0, 0.82, 1.62]), at(_geo.cabin, [0, 1.04, 0.12]),
-    at(_geo.roof, [0, 1.32, 0.18]),
-  ]);
-  _geo.carDark = merge([
-    at(_geo.skirt, [0, 0.34, 0]), at(_geo.bumper, [0, 0.48, -2.12]),
-    at(_geo.bumper, [0, 0.48, 2.12]), at(_geo.spoiler, [0, 0.98, 2.16]),
-  ]);
-  _geo.carGlass = merge([
-    at(_geo.glassF, [0, 1.16, -0.86], [0.62, 0, 0]),
-    at(_geo.glassR, [0, 1.18, 1.12], [-0.66, 0, 0]),
-    at(_geo.glassS, [0.81, 1.12, 0.18]), at(_geo.glassS, [-0.81, 1.12, 0.18]),
-  ]);
-  const wheels = [], hubs = [];
-  for (const [x, z] of [[0.94, 1.4], [-0.94, 1.4], [0.94, -1.4], [-0.94, -1.4]]) {
-    wheels.push(at(_geo.wheel, [x, 0.42, z], RZ));
-    hubs.push(at(_geo.hub, [x, 0.42, z], RZ));
-  }
-  _geo.carWheels = merge(wheels);
-  _geo.carChrome = merge([...hubs, at(_geo.grille, [0, 0.66, -2.24])]);
-  _geo.carHead = merge([at(_geo.light, [0.64, 0.68, -2.22]), at(_geo.light, [-0.64, 0.68, -2.22])]);
-  _geo.carTail = merge([at(_geo.light, [0.64, 0.74, 2.22]), at(_geo.light, [-0.64, 0.74, 2.22])]);
-  _geo.carBlinkR = merge([at(_geo.blinker, [0.95, 0.74, -2.0]), at(_geo.blinker, [0.95, 0.74, 2.0])]);
-  _geo.carBlinkL = merge([at(_geo.blinker, [-0.95, 0.74, -2.0]), at(_geo.blinker, [-0.95, 0.74, 2.0])]);
+  // Traffic cars all share one body, baked from the default profile. The player
+  // and showroom car bake their own per-id silhouette on demand (see carGeoSet).
+  _defaultCarGeo = buildCarGeoSet(DEFAULT_PROFILE);
 
   _geo.truckWheels = merge([[1, -2.6], [-1, -2.6], [1, 0], [-1, 0], [1, 2.6], [-1, 2.6]]
     .map(([x, z]) => at(_geo.bigWheel, [x, 0.5, z], RZ)));
@@ -1522,8 +1610,67 @@ function initSharedAssets() {
 
 function paintMat(color) {
   if (!_paintMats.has(color))
-    _paintMats.set(color, new THREE.MeshStandardMaterial({ color, metalness: 0.55, roughness: 0.38 }));
+    _paintMats.set(color, new THREE.MeshStandardMaterial({ color, metalness: 0.62, roughness: 0.3 }));
   return _paintMats.get(color);
+}
+// Glossy show-car finish reserved for the player's car (clearcoat is a touch
+// heavier, but only one player + one showroom car ever use it).
+const _playerPaintMats = new Map();
+function playerPaintMat(color) {
+  if (!_playerPaintMats.has(color))
+    _playerPaintMats.set(color, new THREE.MeshPhysicalMaterial({
+      color, metalness: 0.6, roughness: 0.26, clearcoat: 1.0, clearcoatRoughness: 0.14,
+    }));
+  return _playerPaintMats.get(color);
+}
+// Tier accent (rocker blades, wing, brake rims) — drawn in the car's rarity color.
+const _accentMats = new Map();
+function accentMat(color) {
+  if (!_accentMats.has(color))
+    _accentMats.set(color, new THREE.MeshStandardMaterial({ color, metalness: 0.5, roughness: 0.4 }));
+  return _accentMats.get(color);
+}
+
+// The player's car: the shared procedural body, upgraded to a glossy finish and
+// dressed with tier-scaling aero so each purchase visibly gets meaner. Bots keep
+// the plain merged body for performance — only the player/showroom car gets this.
+function buildPlayerCar(car) {
+  const set = carGeoSet(car.id);     // this car's own silhouette
+  const p = set.profile;
+  const W = p.width;
+  const g = buildProceduralCar(car.color, set);
+  const tier = car.tier || 0;
+  const acc = accentMat(RARITY_COLOR[tier] || car.color);
+  g.getObjectByName("paint").material = playerPaintMat(car.color);
+  g.getObjectByName("tail").material = _matPlayerTail; // brake lights flare on braking (see render)
+
+  // Aero is placed relative to the silhouette (nose, deck, wheelbase, stance) so
+  // it stays glued to each body shape instead of floating off a short/long car.
+  // Tier 1+: accent blades along the rockers.
+  if (tier >= 1) for (const sx of [1, -1]) {
+    const blade = new THREE.Mesh(_geo.rocker, acc);
+    blade.position.set(sx * 1.02 * W, 0.52, 0.1); g.add(blade);
+  }
+  // Tier 2+: a front splitter slung low under the nose.
+  if (tier >= 2) {
+    const sp = new THREE.Mesh(_geo.splitter, _matBodyDark);
+    sp.position.set(0, 0.33, p.bumperF - 0.2); g.add(sp);
+  }
+  // Tier 3+: a raised rear wing (uprights + accent plane).
+  if (tier >= 3) {
+    for (const sx of [0.62, -0.62]) {
+      const up = new THREE.Mesh(_geo.wingUp, _matBodyDark);
+      up.position.set(sx, 1.06, p.deckZ + 0.56); g.add(up);
+    }
+    const wing = new THREE.Mesh(_geo.wingPln, acc);
+    wing.position.set(0, 1.34, p.deckZ + 0.62); wing.rotation.x = -0.12; g.add(wing);
+  }
+  // Tier 4+: accent brake-disc rims behind the wheels.
+  if (tier >= 4) for (const [x, z] of [[0.94 * W, p.wheelZ], [-0.94 * W, p.wheelZ], [0.94 * W, -p.wheelZ], [-0.94 * W, -p.wheelZ]]) {
+    const ring = new THREE.Mesh(_geo.rimRing, acc);
+    ring.position.set(x, 0.42, z); ring.rotation.z = Math.PI / 2; g.add(ring);
+  }
+  return g;
 }
 function signMat(color) {
   if (!_signMats.has(color)) _signMats.set(color, new THREE.MeshStandardMaterial({ color, roughness: 0.8 }));
@@ -1531,27 +1678,34 @@ function signMat(color) {
 }
 
 // A sculpted 3D car: layered body slabs, a tapered greenhouse with raked glass,
-// chrome trim, hub-capped wheels and a subtle lip — front faces -Z.
-function buildProceduralCar(color) {
+// chrome trim, hub-capped wheels and a subtle lip — front faces -Z. `set` is the
+// baked geometry set for this car's silhouette (traffic uses the default body).
+function buildProceduralCar(color, set = _defaultCarGeo) {
   const g = new THREE.Group();
-  // One mesh per material (panels pre-merged in initSharedAssets), so the whole
-  // car is ~9 draw calls. Front faces -Z.
-  g.add(new THREE.Mesh(_geo.carPaint, paintMat(color)));
-  g.add(new THREE.Mesh(_geo.carDark, _matBodyDark));
-  g.add(new THREE.Mesh(_geo.carGlass, _matGlass));
-  g.add(new THREE.Mesh(_geo.carWheels, _matTire));
-  g.add(new THREE.Mesh(_geo.carChrome, _matChrome));
-  g.add(new THREE.Mesh(_geo.carHead, _matHead));
-  g.add(new THREE.Mesh(_geo.carTail, _matTail));
+  // One mesh per material (panels pre-merged per silhouette), so the whole car
+  // is ~9 draw calls whatever its shape. Front faces -Z.
+  const paint = new THREE.Mesh(set.paint, paintMat(color));
+  paint.name = "paint"; // buildPlayerCar swaps this for a glossy clearcoat finish
+  g.add(paint);
+  g.add(new THREE.Mesh(set.dark, _matBodyDark));
+  g.add(new THREE.Mesh(set.glass, _matGlass));
+  g.add(new THREE.Mesh(set.wheels, _matTire));
+  g.add(new THREE.Mesh(set.chrome, _matChrome));
+  g.add(new THREE.Mesh(set.head, _matHead));
+  const tail = new THREE.Mesh(set.tail, _matTail);
+  tail.name = "tail"; // buildPlayerCar swaps this for the brake-reactive material
+  g.add(tail);
 
   const sh = new THREE.Mesh(_geo.shadow, _matShadow);
-  sh.rotation.x = -Math.PI / 2; sh.position.y = 0.02; g.add(sh);
+  sh.rotation.x = -Math.PI / 2; sh.position.y = 0.02;
+  sh.scale.set(set.profile.width, set.profile.lenZ, 1); // shadow tracks the footprint
+  g.add(sh);
 
   // Turn indicators (both corners per side merged into one mesh), hidden until a
   // merge. placeTraffic flips them on by world side, blinking; the player leaves
   // them dark. Kept in arrays so the existing toggle code is unchanged.
-  const blinkR = new THREE.Mesh(_geo.carBlinkR, _matBlinker); blinkR.visible = false; g.add(blinkR);
-  const blinkL = new THREE.Mesh(_geo.carBlinkL, _matBlinker); blinkL.visible = false; g.add(blinkL);
+  const blinkR = new THREE.Mesh(set.blinkR, _matBlinker); blinkR.visible = false; g.add(blinkR);
+  const blinkL = new THREE.Mesh(set.blinkL, _matBlinker); blinkL.visible = false; g.add(blinkL);
   g.userData.blinkR = [blinkR]; // local +X
   g.userData.blinkL = [blinkL]; // local -X
   return g;
@@ -1877,7 +2031,7 @@ function setPlayerCar(car) {
   if (cached && cached !== "loading" && cached !== "failed") {
     playerMesh = cached.mesh.clone(true);
   } else {
-    playerMesh = buildProceduralCar(car.color);
+    playerMesh = buildPlayerCar(car);
     loadCarModel(car); // try to upgrade to the real model
   }
   scene.add(playerMesh);
@@ -1904,8 +2058,13 @@ function placeTraffic(o) {
 }
 
 // Add/remove Three meshes so they mirror the game's traffic/scenery arrays.
+// The membership set is reused across calls so the per-frame reconcile (run for
+// both traffic and scenery, every frame) allocates nothing on the hot path.
+const _reconcilePresent = new Set();
 function reconcile(group, list, make, place) {
-  const present = new Set(list);
+  const present = _reconcilePresent;
+  present.clear();
+  for (const o of list) present.add(o);
   for (let i = group.children.length - 1; i >= 0; i--) {
     const m = group.children[i];
     if (!present.has(m.userData.ref)) group.remove(m);
@@ -2023,6 +2182,15 @@ function render() {
     playerMesh.rotation.y = -state.playerVX * 3; // slight yaw
     // Blink while phasing through traffic after a shield save.
     playerMesh.visible = state.invuln > 0 ? Math.floor(performance.now() / 70) % 2 === 0 : true;
+    // Brake lights: flare the player's dedicated tail material when braking. The
+    // chase cam faces the car's rear, so this reads as a clear feedback channel.
+    // Eased so the glow swells/fades rather than snapping. nightFactor sets the
+    // resting brightness (applyBiome ramps traffic tails the same way).
+    if (_matPlayerTail) {
+      const tailBase = 0.9 + nightFactor * 1.1;
+      const tailTarget = input.brake > 0 ? tailBase * 3.4 : tailBase;
+      _matPlayerTail.emissiveIntensity += (tailTarget - _matPlayerTail.emissiveIntensity) * 0.4;
+    }
   }
 
   // Speed sells itself: FOV widens with pace, the camera shakes a touch at
@@ -2775,7 +2943,7 @@ function setPreviewCar(car) {
   if (pvCar) { pvScene.remove(pvCar); pvCar = null; }
   const cached = modelCache[car.id];
   if (cached && cached !== "loading" && cached !== "failed") pvCar = cached.mesh.clone(true);
-  else { pvCar = buildProceduralCar(car.color); loadCarModel(car); }
+  else { pvCar = buildPlayerCar(car); loadCarModel(car); }
   if (!owned.includes(car.id)) applySilhouette(pvCar); // locked = blacked-out tease
   pvCar.rotation.y = pvAngle;
   pvScene.add(pvCar);

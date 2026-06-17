@@ -226,31 +226,63 @@ h1, h2 { font-family: var(--font-display); font-weight: 800; letter-spacing: 0.4
   color: #06d6a0;
 }
 
+/* Motorsport-flat primary: solid accent fill with a hard right "edge" bar and an
+   angular clipped corner (racing-livery cut). No gloss gradient, no glow — the
+   hover is a snappy accent underline + slight brighten, not a lift-and-shadow. */
 button {
+  position: relative;
   margin-top: 16px;
-  padding: 13px 30px;
+  padding: 13px 28px;
   font-family: var(--font-display);
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: 0.3px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
   color: #04141b;
-  background: linear-gradient(180deg, #5eeaff, var(--accent-deep));
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  border-radius: 12px;
+  background: linear-gradient(90deg, var(--accent) 0 calc(100% - 7px), var(--accent-deep) calc(100% - 7px));
+  border: none;
+  border-radius: 4px;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%);
   cursor: pointer;
-  box-shadow: 0 6px 22px rgba(56, 225, 255, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.45);
-  transition: transform 0.12s ease, box-shadow 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+  overflow: hidden;
+  transition: background 0.12s ease, transform 0.06s ease, filter 0.12s ease;
 }
+button::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  width: 100%;
+  background: rgba(4, 20, 27, 0.5);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.15s ease;
+}
+button:hover::after { transform: scaleX(1); }
 
 button:hover {
-  background: linear-gradient(180deg, #74efff, #34d2f2);
-  box-shadow: 0 10px 30px rgba(56, 225, 255, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.5);
-  transform: translateY(-1px);
+  background: linear-gradient(90deg, #5eeaff 0 calc(100% - 7px), var(--accent) calc(100% - 7px));
+  filter: brightness(1.05);
 }
 
 button:active {
-  transform: translateY(0) scale(0.97);
+  transform: scale(0.97);
 }
+
+button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+/* Round / pill controls opt out of the angular cut + uppercase treatment */
+.arrow, .mode-toggle .mode-opt, .tc-btn, #mute, #pause-btn {
+  clip-path: none;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.arrow::after, .mode-toggle .mode-opt::after,
+.tc-btn::after, #mute::after, #pause-btn::after { content: none; }
 
 /* Secondary / ghost: frosted glass with a hairline that lights up cyan */
 button.alt {
@@ -261,11 +293,11 @@ button.alt {
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
+button.alt::after { background: var(--accent); }
 button.alt:hover {
   background: var(--glass-strong);
   border-color: var(--accent-line);
   color: #fff;
-  box-shadow: 0 0 0 1px var(--accent-soft), 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 button:disabled {
   opacity: 0.4;
@@ -376,8 +408,7 @@ button:disabled {
 }
 .mode-toggle .mode-opt.on {
   color: #04141b;
-  background: linear-gradient(180deg, #5eeaff, var(--accent-deep));
-  box-shadow: 0 2px 10px rgba(56, 225, 255, 0.35);
+  background: var(--accent);
 }
 
 /* ---- Settings panel ---- */
@@ -580,16 +611,18 @@ button:disabled {
 }
 .upg-btn {
   margin: 0;
-  padding: 5px 10px;
+  padding: 5px 11px;
   font-size: 12px;
-  font-weight: 700;
-  background: linear-gradient(180deg, #19e6b0, #06d6a0);
-  color: #06291f;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  background: #06d6a0;
+  color: #04241b;
   flex-shrink: 0;
-  box-shadow: 0 3px 10px rgba(6, 214, 160, 0.3);
 }
+.upg-btn::after { background: rgba(4, 36, 27, 0.45); }
 .upg-btn:hover {
-  background: linear-gradient(180deg, #3df0c2, #19e6b0);
+  background: #19e6b0;
+  filter: none;
 }
 .upg-btn .cred-ico { width: 12px; height: 12px; }
 
@@ -872,19 +905,20 @@ body.touch.playing #mute { left: 50%; bottom: 16px; transform: translateX(6px); 
   line-height: 1.4;
 }
 
-/* ---- Buy button as a premium tag ---- */
+/* ---- Buy button: flat gold with a hard deep-gold edge bar (matches the
+   motorsport-flat primary, but in currency gold so money still reads as money) */
 .car-btn.buy,
 .env-btn.buy {
-  background: linear-gradient(180deg, #ffe08a, #ffcf4d);
-  color: #3a2a00;
+  background: linear-gradient(90deg, var(--gold) 0 calc(100% - 7px), #d99b2e calc(100% - 7px));
+  color: #2a1d00;
   font-weight: 800;
-  border-color: rgba(255, 240, 200, 0.5);
-  box-shadow: 0 4px 16px rgba(255, 209, 102, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
+.car-btn.buy::after,
+.env-btn.buy::after { background: rgba(42, 29, 0, 0.45); }
 .car-btn.buy:hover,
 .env-btn.buy:hover {
-  background: linear-gradient(180deg, #ffe9a4, #ffd866);
-  box-shadow: 0 8px 24px rgba(255, 209, 102, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  background: linear-gradient(90deg, #ffdc7a 0 calc(100% - 7px), var(--gold) calc(100% - 7px));
+  filter: none;
 }
 .car-btn.buy .cred-ico,
 .env-btn.buy .cred-ico { width: 14px; height: 14px; }
