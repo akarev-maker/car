@@ -141,6 +141,10 @@
     }
   }
   </script>
-  <script type="module" src="src/main.js?v=33"></script>
+  <!-- IMPORTANT: no ?v= query here. render.js/world3d.js import "./main.js", so a
+       mismatched query would make the browser evaluate main.js twice as two
+       separate modules (two game loops fighting). Keep this URL identical to the
+       import specifier. -->
+  <script type="module" src="src/main.js"></script>
 </body>
 </html>
