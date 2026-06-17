@@ -41,6 +41,7 @@ window.addEventListener("keydown", (e) => {
     case "m": case "M": toggleMute(); break;
     case "f": case "F": toggleFps(); break; // perf overlay (fps / frame time / draw calls)
     case "p": case "P": case "Escape": togglePause(); break; // pause / resume (Quit to Home lives in the menu)
+    case "r": case "R": if (state.running) startGame(); break; // restart the current run from scratch
   }
 });
 window.addEventListener("keyup", (e) => {

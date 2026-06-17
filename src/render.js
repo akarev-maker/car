@@ -351,7 +351,7 @@ function signMat(color) {
 // A sculpted 3D car: layered body slabs, a tapered greenhouse with raked glass,
 // chrome trim, hub-capped wheels and a subtle lip — front faces -Z. `set` is the
 // baked geometry set for this car's silhouette (traffic uses the default body).
-function buildProceduralCar(color, set = _defaultCarGeo) {
+function buildProceduralCar(color, set = _defaultCarGeo, shadow = true) {
   const g = new THREE.Group();
   // One mesh per material (panels pre-merged per silhouette), so the whole car
   // is ~9 draw calls whatever its shape. Front faces -Z.
@@ -367,10 +367,12 @@ function buildProceduralCar(color, set = _defaultCarGeo) {
   tail.name = "tail"; // buildPlayerCar swaps this for the brake-reactive material
   g.add(tail);
 
-  const sh = new THREE.Mesh(_geo.shadow, _matShadow);
-  sh.rotation.x = -Math.PI / 2; sh.position.y = 0.02;
-  sh.scale.set(set.profile.width, set.profile.lenZ, 1); // shadow tracks the footprint
-  g.add(sh);
+  if (shadow) { // player keeps a contact shadow; traffic skips it (the disc reads as an ugly halo)
+    const sh = new THREE.Mesh(_geo.shadow, _matShadow);
+    sh.rotation.x = -Math.PI / 2; sh.position.y = 0.02;
+    sh.scale.set(set.profile.width, set.profile.lenZ, 1); // shadow tracks the footprint
+    g.add(sh);
+  }
 
   // Turn indicators (both corners per side merged into one mesh), hidden until a
   // merge. placeTraffic flips them on by world side, blinking; the player leaves
@@ -393,8 +395,6 @@ function buildTruck(color) {
   g.add(new THREE.Mesh(_geo.truckWheels, _matTire));
   g.add(new THREE.Mesh(_geo.truckHead, _matHead));
   g.add(new THREE.Mesh(_geo.truckTail, _matTail));
-  const sh = new THREE.Mesh(_geo.shadow, _matShadow);
-  sh.rotation.x = -Math.PI / 2; sh.position.y = 0.02; sh.scale.set(1.25, 2.1, 1); g.add(sh);
   return g;
 }
 function buildBus(color) {
@@ -404,14 +404,12 @@ function buildBus(color) {
   g.add(new THREE.Mesh(_geo.busWheels, _matTire));
   g.add(new THREE.Mesh(_geo.busHead, _matHead));
   g.add(new THREE.Mesh(_geo.busTail, _matTail));
-  const sh = new THREE.Mesh(_geo.shadow, _matShadow);
-  sh.rotation.x = -Math.PI / 2; sh.position.y = 0.02; sh.scale.set(1.2, 2.0, 1); g.add(sh);
   return g;
 }
 function buildVehicle(o) {
   if (o.kind === "truck") return buildTruck(o.color);
   if (o.kind === "bus") return buildBus(o.color);
-  return buildProceduralCar(o.color);
+  return buildProceduralCar(o.color, _defaultCarGeo, false); // traffic: no contact-shadow disc
 }
 
 // One facade "block" of BWIN_COLS x BWIN_ROWS windows on a concrete wall: a
