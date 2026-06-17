@@ -5,7 +5,7 @@ it uses the detailed **procedural** cars — so the game works right now with ze
 downloads and no failed network requests.
 
 To use a real model: drop `models/<id>.glb` in, then add that id to
-`MODELS_AVAILABLE` in `game.js` (next to `MODEL_CFG`). It's used on the next run
+`MODELS_AVAILABLE` in `src/render.js` (next to `MODEL_CFG`). It's used on the next run
 (the selected car even hot-swaps mid-game once loaded). The `MODELS_AVAILABLE`
 gate is what stops the game from requesting `.glb` files that aren't there.
 
@@ -38,7 +38,7 @@ use — many are "personal use only".
 ## Fitting a model to the game
 
 Models come in different sizes, orientations, and origins. Tune each car in
-`game.js` → `MODEL_CFG`:
+`src/render.js` → `MODEL_CFG`:
 
 ```js
 const MODEL_CFG = {
