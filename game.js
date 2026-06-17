@@ -161,6 +161,14 @@ const QUALITY_DPR = { high: 1.5, low: 1.0 }; // pixel-ratio cap per quality (fil
 let highScore = 0;
 let goals = null;  // daily goals:  { date, items:[{id,target,reward,progress,done}] } — see goals section
 let weekly = null; // weekly goals: same shape, keyed by ISO-ish week, bigger targets/rewards
+// Lifetime career totals (persisted) that the progression ladder grinds against.
+// `best*` track your single best run; the rest accumulate across every run ever.
+let career = defaultCareer();
+function defaultCareer() {
+  return { runs: 0, dist: 0, passed: 0, scoreTotal: 0, slowmos: 0, shields: 0,
+           bestScore: 0, bestPassed: 0, bestDist: 0, bestCombo: 0, bestSpeed: 0, bestSlowmos: 0 };
+}
+const CHAL_VERSION = 2; // bump when the ladder changes to reset old (now-invalid) completions
 
 // Internal speed -> display number. 1 internal unit = 3 km/h; mph = km/h × 0.621371.
 const SPEED_UNITS = { kmh: { factor: 3, label: "km/h" }, mph: { factor: 1.864113, label: "mph" } };
@@ -187,6 +195,10 @@ function loadProgress() {
     upgrades = JSON.parse(localStorage.getItem("tr_upg")) || {};
     goals = JSON.parse(localStorage.getItem("tr_goals")) || null;
     weekly = JSON.parse(localStorage.getItem("tr_weekly")) || null;
+    career = Object.assign(defaultCareer(), JSON.parse(localStorage.getItem("tr_career")) || {});
+    // The ladder was redesigned; old completions no longer map to the new tiers,
+    // so wipe them once when the version changes (career totals carry forward).
+    if (parseInt(localStorage.getItem("tr_chalver")) !== CHAL_VERSION) challengesDone = [];
   } catch (e) { /* use defaults */ }
   ensureGoals(); // (re)generate today's / this week's sets if missing or stale
   if (!owned.includes("hatch")) owned.push("hatch");
@@ -219,6 +231,8 @@ function saveProgress() {
     localStorage.setItem("tr_upg", JSON.stringify(upgrades));
     localStorage.setItem("tr_goals", JSON.stringify(goals));
     localStorage.setItem("tr_weekly", JSON.stringify(weekly));
+    localStorage.setItem("tr_career", JSON.stringify(career));
+    localStorage.setItem("tr_chalver", CHAL_VERSION);
   } catch (e) { /* ignore */ }
 }
 
@@ -399,40 +413,94 @@ function goalToast(it) {
   audioUnlock();
 }
 
-// ---- Progression challenges ----
-// A tiered ladder of one-time skill challenges, separate from the daily/weekly
-// goals. Each rewards credits; a tier unlocks once the previous one is fully
-// cleared, giving a sense of a career to climb. `stat` names a field on the
-// run-stats object (the same values goals read, plus per-run slow-mo / shield
-// counters); a challenge completes the first run that meets `target`.
+// ---- Progression ladder (career ranks) ----
+// A long climb across MANY runs — not a single-session checklist. Each tier mixes
+// single-run skill feats (your best ever for a stat) with lifetime grind totals
+// (accumulated across every run you ever play). The lifetime gates are what make
+// the top ranks a real haul: you cannot one-run your way to Legend. A tier unlocks
+// only once the tier before it is fully cleared.
+//
+// Every challenge reads ONE field. "max" fields track your best single run; "sum"
+// fields accumulate forever. chalValue() blends the committed career total with
+// the run in progress, so progress ticks live and credits the instant a bar fills.
+const CHAL_FIELDS = {
+  runScore:   { agg: "max", career: "bestScore",   run: (r) => r.score,    fmt: (v) => fmt(v) },
+  runPassed:  { agg: "max", career: "bestPassed",  run: (r) => r.passed,   fmt: (v) => fmt(v) },
+  runDist:    { agg: "max", career: "bestDist",    run: (r) => r.distKm,   fmt: (v) => v.toFixed(1) + " km" },
+  runCombo:   { agg: "max", career: "bestCombo",   run: (r) => r.maxCombo, fmt: (v) => fmt(v) },
+  runSpeed:   { agg: "max", career: "bestSpeed",   run: (r) => r.topSpeed, fmt: (v) => spd(v) + " " + spdLabel() },
+  runSlowmos: { agg: "max", career: "bestSlowmos", run: (r) => r.slowmos,  fmt: (v) => fmt(v) },
+  totRuns:    { agg: "sum", career: "runs",        run: ()  => (state.running ? 1 : 0), fmt: (v) => fmt(v) },
+  totDist:    { agg: "sum", career: "dist",        run: (r) => r.distKm,   fmt: (v) => fmt(Math.floor(v)) + " km" },
+  totPassed:  { agg: "sum", career: "passed",      run: (r) => r.passed,   fmt: (v) => fmt(v) },
+  totScore:   { agg: "sum", career: "scoreTotal",  run: (r) => r.score,    fmt: (v) => fmt(v) },
+  totSlowmos: { agg: "sum", career: "slowmos",     run: (r) => r.slowmos,  fmt: (v) => fmt(v) },
+  totShields: { agg: "sum", career: "shields",     run: (r) => r.shields,  fmt: (v) => fmt(v) },
+};
+// Live value of a field: committed career best/total folded together with the run
+// in progress (zero run contribution when none is active — see _ZERO_R).
+function chalValue(field, r) {
+  const f = CHAL_FIELDS[field];
+  const rv = f.run(r) || 0;
+  return f.agg === "max" ? Math.max(career[f.career] || 0, rv) : (career[f.career] || 0) + rv;
+}
+const _ZERO_R = { distKm: 0, score: 0, passed: 0, maxCombo: 0, topSpeed: 0, slowmos: 0, shields: 0 };
+
 const CHALLENGES = [
   { tier: "Rookie", items: [
-    { id: "rk-pass",  stat: "passed",   target: 40,    reward: 200, desc: "Pass 40 cars in a single run" },
-    { id: "rk-dist",  stat: "distKm",   target: 3,     reward: 200, desc: "Drive 3 km in a single run" },
-    { id: "rk-spd",   stat: "topSpeed", target: 36,    reward: 200, desc: () => `Hit ${spd(36)} ${spdLabel()}` },
+    { id: "rk-pass",  field: "runPassed",  target: 40,    reward: 200, desc: "Pass 40 cars in a single run" },
+    { id: "rk-dist",  field: "runDist",    target: 3,     reward: 200, desc: "Drive 3 km in a single run" },
+    { id: "rk-spd",   field: "runSpeed",   target: 36,    reward: 200, desc: () => `Hit ${spd(36)} ${spdLabel()}` },
+    { id: "rk-combo", field: "runCombo",   target: 6,     reward: 200, desc: "Chain a 6-pass near-miss combo" },
   ]},
   { tier: "Pro", items: [
-    { id: "pr-pass",  stat: "passed",   target: 90,    reward: 400, desc: "Pass 90 cars in a single run" },
-    { id: "pr-score", stat: "score",    target: 12000, reward: 400, desc: "Score 12,000 in a single run" },
-    { id: "pr-combo", stat: "maxCombo", target: 10,    reward: 400, desc: "Chain a 10-pass near-miss combo" },
-    { id: "pr-slow",  stat: "slowmos",  target: 1,     reward: 400, desc: "Trigger a slow-mo with a razor-close pass" },
+    { id: "pr-score", field: "runScore",   target: 12000, reward: 450, desc: "Score 12,000 in a single run" },
+    { id: "pr-combo", field: "runCombo",   target: 12,    reward: 450, desc: "Chain a 12-pass near-miss combo" },
+    { id: "pr-slow",  field: "runSlowmos", target: 1,     reward: 450, desc: "Trigger a slow-mo with a razor-close pass" },
+    { id: "pr-runs",  field: "totRuns",    target: 5,     reward: 450, desc: "Complete 5 runs" },
   ]},
   { tier: "Ace", items: [
-    { id: "ac-shield",stat: "shields",  target: 1,     reward: 600, desc: "Earn and use a shield" },
-    { id: "ac-dist",  stat: "distKm",   target: 8,     reward: 600, desc: "Drive 8 km in a single run" },
-    { id: "ac-combo", stat: "maxCombo", target: 18,    reward: 600, desc: "Chain an 18-pass near-miss combo" },
-    { id: "ac-spd",   stat: "topSpeed", target: 52,    reward: 600, desc: () => `Hit ${spd(52)} ${spdLabel()}` },
+    { id: "ac-pass",  field: "runPassed",  target: 150,   reward: 750, desc: "Pass 150 cars in a single run" },
+    { id: "ac-dist",  field: "runDist",    target: 10,    reward: 750, desc: "Drive 10 km in a single run" },
+    { id: "ac-runs",  field: "totRuns",    target: 15,    reward: 750, desc: "Complete 15 runs" },
+    { id: "ac-tpass", field: "totPassed",  target: 1500,  reward: 750, desc: "Pass 1,500 cars all-time" },
+    { id: "ac-shld",  field: "totShields", target: 10,    reward: 750, desc: "Use 10 shields all-time" },
+  ]},
+  { tier: "Veteran", items: [
+    { id: "vt-score", field: "runScore",   target: 45000,  reward: 1300, desc: "Score 45,000 in a single run" },
+    { id: "vt-combo", field: "runCombo",   target: 30,     reward: 1300, desc: "Chain a 30-pass near-miss combo" },
+    { id: "vt-slow",  field: "runSlowmos", target: 6,      reward: 1300, desc: "Trigger 6 slow-mos in one run" },
+    { id: "vt-tdist", field: "totDist",    target: 250,    reward: 1300, desc: "Drive 250 km all-time" },
+    { id: "vt-tscr",  field: "totScore",   target: 300000, reward: 1300, desc: "Bank 300,000 total score all-time" },
+  ]},
+  { tier: "Master", items: [
+    { id: "ms-score", field: "runScore",   target: 75000,  reward: 2500, desc: "Score 75,000 in a single run" },
+    { id: "ms-pass",  field: "runPassed",  target: 350,    reward: 2500, desc: "Pass 350 cars in a single run" },
+    { id: "ms-spd",   field: "runSpeed",   target: 95,     reward: 2500, desc: () => `Hit ${spd(95)} ${spdLabel()}` },
+    { id: "ms-runs",  field: "totRuns",    target: 70,     reward: 2500, desc: "Complete 70 runs" },
+    { id: "ms-tdist", field: "totDist",    target: 600,    reward: 2500, desc: "Drive 600 km all-time" },
+    { id: "ms-tslow", field: "totSlowmos", target: 120,    reward: 2500, desc: "Trigger 120 slow-mos all-time" },
   ]},
   { tier: "Legend", items: [
-    { id: "lg-score", stat: "score",    target: 30000, reward: 1200, desc: "Score 30,000 in a single run" },
-    { id: "lg-pass",  stat: "passed",   target: 160,   reward: 1200, desc: "Pass 160 cars in a single run" },
-    { id: "lg-slow",  stat: "slowmos",  target: 3,     reward: 1200, desc: "Trigger 3 slow-mos in one run" },
+    { id: "lg-score", field: "runScore",   target: 120000,  reward: 5000, desc: "Score 120,000 in a single run" },
+    { id: "lg-combo", field: "runCombo",   target: 60,      reward: 5000, desc: "Chain a 60-pass near-miss combo" },
+    { id: "lg-pass",  field: "runPassed",  target: 500,     reward: 5000, desc: "Pass 500 cars in a single run" },
+    { id: "lg-runs",  field: "totRuns",    target: 150,     reward: 5000, desc: "Complete 150 runs" },
+    { id: "lg-tpass", field: "totPassed",  target: 50000,   reward: 5000, desc: "Pass 50,000 cars all-time" },
+    { id: "lg-tscr",  field: "totScore",   target: 6000000, reward: 5000, desc: "Bank 6,000,000 total score all-time" },
   ]},
 ];
 const _chalDesc = (it) => (typeof it.desc === "function" ? it.desc() : it.desc);
 const chalDone = (id) => challengesDone.includes(id);
 const tierUnlocked = (i) => i === 0 || CHALLENGES[i - 1].items.every((it) => chalDone(it.id));
+// Highest fully-cleared tier — the player's current career rank (or "Unranked").
+function careerRank() {
+  let rank = "Unranked";
+  for (const tier of CHALLENGES) if (tier.items.every((it) => chalDone(it.id))) rank = tier.tier;
+  return rank;
+}
 
+// Current run snapshot the "run*" fields read (folded into career by chalValue).
 function runStatsNow() {
   return {
     distKm: state.position / DIST_DIV, score: state.score, passed: state.passed,
@@ -440,15 +508,15 @@ function runStatsNow() {
     slowmos: state.runSlowmos, shields: state.runShields,
   };
 }
-// Complete + reward any challenge met by the current run, in unlocked tiers.
-// Tiers are walked in order so finishing one can cascade into the next here.
+// Complete + reward any challenge met right now, in unlocked tiers. Tiers are
+// walked in order so clearing one can cascade into the next within a single call.
 function checkChallenges(r) {
   const done = [];
   CHALLENGES.forEach((tier, i) => {
     if (!tierUnlocked(i)) return;
     for (const it of tier.items) {
       if (chalDone(it.id)) continue;
-      if ((r[it.stat] || 0) >= it.target) { challengesDone.push(it.id); bank += it.reward; done.push(it); }
+      if (chalValue(it.field, r) >= it.target) { challengesDone.push(it.id); bank += it.reward; done.push(it); }
     }
   });
   return done;
@@ -463,6 +531,16 @@ function challengeToast(it) {
     `<div class="toast-body"><b>Challenge complete</b><span>${_chalDesc(it)}</span></div>` +
     `<span class="toast-rew">${CRED_ICO}${it.reward}</span>`, "event");
   audioUnlock();
+}
+
+// Each new heat stage: a short center banner + rising sting, telegraphing that the
+// road just got harder (and the score multiplier just went up).
+function onHeatStage(stage) {
+  showToast(
+    `<span class="toast-ico heat">${ico("ico-fire")}</span>` +
+    `<div class="toast-body"><b>Heat ${stage}</b><span>Faster traffic · bigger score</span></div>`,
+    "heat");
+  audioHeat(stage);
 }
 
 // ---- State ----
@@ -487,9 +565,8 @@ const state = {
   shield: false,    // a held shield that auto-saves the next fatal hit
   shieldCharge: 0,  // 0..1 progress toward the next shield (from near-misses)
   invuln: 0,        // frames of phase-through after a shield save
-  event: null,      // active dynamic event { id, frames } or null
-  eventCD: 0,       // frames until the next event may start
-  rain: 0,          // 0..1 eased rain intensity (visual + grip)
+  heat: 0,          // intra-run escalation (rises with distance; drives difficulty + score)
+  heatStage: 1,     // 1 + floor(heat); the readable stage shown in the HUD / banner
   // combo + run stats
   combo: 0,
   comboTimer: 0,    // frames remaining before the combo lapses
@@ -503,6 +580,25 @@ const state = {
 
 const COMBO_WINDOW = 150;   // frames (~2.5s) to land the next near-miss
 const comboMult = (combo) => Math.min(8, 1 + Math.floor(combo / 2)); // x1..x8
+
+// ---- Heat: intra-run difficulty escalation ----
+// One value (heat = km survived / HEAT_KM) climbs the whole run and drives every
+// difficulty knob at once — traffic closes faster, waves pack tighter, oncoming
+// thickens, the horizon pulls in — plus a rising score multiplier as the payoff.
+// Closing speed is left uncapped so a run always eventually outruns your reaction
+// and ends: that's the arc. The integer stage (1 + floor(heat)) is the readable
+// beat shown in the HUD and announced by a banner each step-up.
+// Starting values — TEST: a skilled player on a good car should reach ~stage 6-10
+// before traffic outpaces them. If most runs die before stage 4 the ramp is too
+// steep (lower HEAT_CLOSE / raise HEAT_KM); if runs cruise past stage 15 unbothered
+// it's too shallow (raise HEAT_CLOSE / HEAT_GAP).
+const HEAT_KM = 2;          // km of survival per heat stage
+const HEAT_CLOSE = 0.06;    // +6% traffic closing speed per stage (the run-ender)
+const HEAT_GAP = 0.05;      // spawn-gap tightening per stage (denser waves), floored
+const HEAT_ONC = 0.05;      // oncoming-share ramp per stage
+const HEAT_FOG = 0.03;      // sightline pull-in per stage, floored at 0.5
+const HEAT_SCORE = 0.12;    // +0.12x score per stage (reward for pushing deeper)
+const heatAt = () => (state.position / DIST_DIV) / HEAT_KM;
 
 // Exceptional-pass slow-mo: a *very* close pass at speed briefly bends time.
 // Real-time durations (ms); a cooldown keeps a combo chain from stuttering.
@@ -518,19 +614,6 @@ const SHIELD_GAIN_BASE = 0.03;   // charge per near-miss, regardless of closenes
 const SHIELD_GAIN_CLOSE = 0.07;  // extra charge scaled by how close it was
 const SHIELD_INVULN = 90;        // frames (~1.5s) of phasing after a save
 
-// ---- Dynamic events / weather ----
-// Occasional run events that shake up the road. All are CHEAP: rain is a 2D
-// overlay + grip/fog tweaks (no 3D particles), rush is just a denser spawn rate,
-// fog is a shorter sightline. One runs at a time, announced by a toast.
-const EVENT_MIN_KM = 1.2;        // no events until you've driven this far
-const EVENT_GAP_MIN = 1500, EVENT_GAP_MAX = 2700; // frames between events
-const EVENT_DUR_MIN = 900,  EVENT_DUR_MAX = 1500; // frames an event lasts
-const EVENTS = [
-  { id: "rain", name: "Rain",      blurb: "Slick roads — ease off the wheel", ico: "ico-rain" },
-  { id: "rush", name: "Rush Hour", blurb: "Heavy traffic moving in",          ico: "ico-car"  },
-  { id: "fog",  name: "Fog Bank",  blurb: "Visibility dropping",              ico: "ico-fog"  },
-];
-const _randInt = (a, b) => a + Math.floor(Math.random() * (b - a));
 const DIST_DIV = 16000;     // game-units per displayed "km"
 const CREDIT_RATE = 0.125;  // credits earned = score x this (score stays the bragging number)
 
@@ -825,8 +908,8 @@ function audioSlowmo() {
 function audioShield() { ensureAudio(); [523, 784, 1047, 1568].forEach((f, i) => uiTone(f, i * 0.05, 0.5, "triangle", 0.09)); }
 // A clean two-note "armed" ding when a shield finishes charging.
 function audioShieldReady() { ensureAudio(); uiTone(880, 0, 0.12, "sine", 0.08); uiTone(1320, 0.09, 0.16, "sine", 0.07); }
-// A soft low alert when a dynamic event rolls in.
-function audioEvent() { ensureAudio(); uiTone(294, 0, 0.18, "sine", 0.07); uiTone(392, 0.1, 0.22, "sine", 0.06); }
+// Two rising notes when the road heats up — a step-up sting, brighter each stage.
+function audioHeat(stage) { ensureAudio(); const b = 300 + Math.min(stage, 12) * 26; uiTone(b, 0, 0.12, "sawtooth", 0.06); uiTone(b * 1.5, 0.08, 0.18, "triangle", 0.07); }
 function audioCoin()   { ensureAudio(); uiTone(784, 0, 0.08, "triangle", 0.13); uiTone(1175, 0.06, 0.10, "triangle", 0.13); uiTone(1568, 0.12, 0.16, "sine", 0.10); }
 function audioUnlock() { ensureAudio(); [523, 659, 784, 1047, 1319].forEach((f, i) => uiTone(f, i * 0.08, 0.45, "triangle", 0.11)); }
 function audioDenied() { ensureAudio(); uiTone(150, 0, 0.14, "square", 0.08); uiTone(110, 0.07, 0.18, "square", 0.08); }
@@ -922,13 +1005,15 @@ function spawnVehicle(lane, dir) {
   }
   const kind = pickKind(dir);
   const v = VEHICLES[kind];
-  // Everyone keeps moving — slowest is still half of top traffic speed.
+  // Everyone keeps moving — slowest is still half of top traffic speed. As heat
+  // climbs, new traffic closes faster (uncapped) — the main thing that, in time,
+  // outruns your reaction and ends the run.
   const base = TRAFFIC_MAX_SPEED * (TRAFFIC_MIN_FACTOR + (1 - TRAFFIC_MIN_FACTOR) * Math.random());
   traffic.push({
     lane, lx: lane, z, dir, kind,
     halfW: v.halfW,
     prevDz: spawnAhead(),
-    speed: base * v.speedF,
+    speed: base * v.speedF * (1 + HEAT_CLOSE * state.heat),
     color: TRAFFIC_COLORS[Math.floor(Math.random() * TRAFFIC_COLORS.length)],
     changeCD: 90 + Math.floor(Math.random() * 180), // frames until it may weave
     signalDir: 0,      // world side it's signaling (-1 left, +1 right, 0 none)
@@ -944,8 +1029,8 @@ function spawnWave() {
     // Classic: 1–3 cars across the four lanes, always leaving a gap to thread.
     const lanes = [...fl];
     let count = 1;
-    if (Math.random() < Math.min(0.6, state.position / 40000) * onc) count++;
-    if (Math.random() < Math.min(0.35, state.position / 80000) * onc) count++;
+    if (Math.random() < Math.min(0.6, state.heat * 0.18) * onc) count++;
+    if (Math.random() < Math.min(0.4, state.heat * 0.10) * onc) count++;
     count = Math.min(count, fl.length - 2);
     for (let n = 0; n < count; n++)
       spawnVehicle(lanes.splice(Math.floor(Math.random() * lanes.length), 1)[0], 1);
@@ -954,29 +1039,11 @@ function spawnWave() {
   // Two-way: one forward vehicle (so a forward lane is always threadable), plus
   // a chance of oncoming whose density ramps with distance.
   spawnVehicle(fl[Math.floor(Math.random() * fl.length)], 1);
-  const oncChance = Math.min(0.85, (0.25 + state.position / 50000) * onc);
+  const oncChance = Math.min(0.92, (0.25 + HEAT_ONC * state.heat) * onc);
   if (Math.random() < oncChance)
     spawnVehicle(ONC_LANES[Math.floor(Math.random() * ONC_LANES.length)], -1);
 }
 
-// Run one event at a time: count it down, then cool down before the next. The
-// effects (grip, spawn rate, fog) are read live elsewhere from state.event/rain.
-function updateEvents() {
-  if (state.event) {
-    if (--state.event.frames <= 0) { state.event = null; state.eventCD = _randInt(EVENT_GAP_MIN, EVENT_GAP_MAX); }
-  } else if (state.position / DIST_DIV > EVENT_MIN_KM && --state.eventCD <= 0) {
-    const e = EVENTS[Math.floor(Math.random() * EVENTS.length)];
-    state.event = { id: e.id, frames: _randInt(EVENT_DUR_MIN, EVENT_DUR_MAX) };
-    showToast(
-      `<span class="toast-ico evt">${ico(e.ico)}</span>` +
-      `<div class="toast-body"><b>${e.name}</b><span>${e.blurb}</span></div>`, "event");
-    audioEvent();
-  }
-  // Rain intensity eases in while a rain event runs and out when it ends.
-  const target = state.event && state.event.id === "rain" ? 1 : 0;
-  state.rain += (target - state.rain) * 0.04;
-  if (state.rain < 0.005) state.rain = 0;
-}
 
 function addPopup(x, y, text, color, big = false) {
   popups.push({ x, y, text, color, life: 1, big });
@@ -1154,8 +1221,13 @@ function update() {
   state.speed = clamp(state.speed, 0, state.maxSpeed);
   state.position += state.speed;
 
-  // Steering (handling scales with the car; rain makes it floatier)
-  const grip = (0.25 + 0.75 * (state.speed / state.maxSpeed)) * (1 - 0.32 * state.rain);
+  // Heat climbs with distance survived. Crossing into a new stage fires a banner.
+  state.heat = heatAt();
+  const stage = 1 + Math.floor(state.heat);
+  if (stage > state.heatStage) { state.heatStage = stage; onHeatStage(stage); }
+
+  // Steering (handling scales with the car; grip firms up with speed)
+  const grip = 0.25 + 0.75 * (state.speed / state.maxSpeed);
   state.playerVX += input.steer * STEER_ACCEL * activeStats.handling * grip;
   if (input.steer === 0) state.playerVX *= STEER_FRICTION;
   state.playerVX = clamp(state.playerVX, -STEER_MAX_V * activeStats.handling, STEER_MAX_V * activeStats.handling);
@@ -1163,17 +1235,15 @@ function update() {
   if (state.playerX < -PLAYER_X_LIMIT) { state.playerX = -PLAYER_X_LIMIT; state.playerVX = 0; }
   if (state.playerX > PLAYER_X_LIMIT) { state.playerX = PLAYER_X_LIMIT; state.playerVX = 0; }
 
-  // Spawn traffic by distance (denser over time), scaled by chosen density and
-  // squeezed during a Rush Hour event.
-  const rush = state.event && state.event.id === "rush" ? 0.45 : 1;
-  const spawnGap = Math.max(1500, 3000 - state.position / 30) * densityCfg().gap * rush;
+  // Spawn traffic by distance, packed tighter as heat climbs, scaled by density.
+  const heatGap = Math.max(0.4, 1 - HEAT_GAP * state.heat);
+  const spawnGap = Math.max(1000, 3000 * heatGap) * densityCfg().gap;
   if (state.position - state.lastSpawnPos > spawnGap) {
     state.lastSpawnPos = state.position;
     spawnWave();
   }
 
   updateScenery();
-  updateEvents();
 
   // Advance traffic (oncoming travels toward you), weave, then de-overlap lanes.
   for (const car of traffic) { car.z += car.speed * car.dir; updateLaneChange(car); }
@@ -1187,6 +1257,7 @@ function update() {
 
   // Passes/crashes happen at YOUR plane (where you see them alongside).
   const speedFactor = state.speed / state.maxSpeed;
+  const heatMult = 1 + HEAT_SCORE * state.heat; // deeper into the run pays more
   for (let i = traffic.length - 1; i >= 0; i--) {
     const car = traffic[i];
     const dz = car.z - state.position;
@@ -1215,7 +1286,7 @@ function update() {
           state.comboTimer = COMBO_WINDOW;
           state.mult = comboMult(state.combo);
           const onc = car.dir < 0 ? ONCOMING_BONUS : 1; // threading oncoming pays more
-          const pts = Math.round((40 + closeness * 200) * (0.35 + 0.65 * speedFactor) * onc) * state.mult;
+          const pts = Math.round((40 + closeness * 200) * (0.35 + 0.65 * speedFactor) * onc * heatMult) * state.mult;
           state.score += pts;
           const tag = state.mult > 1 ? `x${state.mult} +${pts}` : `+${pts}`;
           // Juice: the edge pulse runs hotter (gold -> white) with the combo
@@ -1253,7 +1324,7 @@ function update() {
             if (closeness > 0.3) addRing(sp.x, sp.y, closeness, "84,224,138");
           }
         } else {
-          state.score += Math.round(8 * (0.5 + 0.5 * speedFactor)) * state.mult;
+          state.score += Math.round(8 * (0.5 + 0.5 * speedFactor) * heatMult) * state.mult;
         }
         audioWhoosh(pan, (0.25 + 0.75 * closeness) * (0.4 + 0.6 * speedFactor));
       }
@@ -1328,6 +1399,9 @@ function cacheHUD() {
     comboFill: document.getElementById("combo-fill"),
     shield: document.getElementById("shield"),
     shieldFill: document.getElementById("shield-fill"),
+    heat: document.getElementById("heat-hud"),
+    heatStage: document.getElementById("heat-stage"),
+    heatMult: document.getElementById("heat-mult"),
   };
 }
 function updateHUD() {
@@ -1348,6 +1422,12 @@ function updateHUD() {
     hud.shield.classList.toggle("armed", state.shield);
     hud.shieldFill.style.width = (state.shield ? 100 : state.shieldCharge * 100) + "%";
   }
+  if (hud.heat) {
+    // Show the readout once the road starts heating up (past the stage-1 warmup).
+    hud.heat.classList.toggle("on", state.heatStage > 1);
+    hud.heatStage.textContent = "HEAT " + state.heatStage;
+    hud.heatMult.textContent = "x" + (1 + HEAT_SCORE * state.heat).toFixed(1);
+  }
 }
 
 // ============================================================
@@ -1356,6 +1436,7 @@ function updateHUD() {
 let scene, camera, renderer, fx, fxCtx, roadTex;
 let roadTexOne, roadTexTwo, roadMat; // one-way / two-way road textures + shared material
 let _blinkOn = true; // shared on/off phase so all active turn signals flash in sync
+let _beamsOn = false; // whether traffic headlight beams show this frame (night + High quality)
 
 // Point the road at the texture for the current traffic mode.
 function applyRoadMode() {
@@ -1366,6 +1447,7 @@ function applyRoadMode() {
 }
 let trafficGroup, sceneryGroup, playerMesh = null, playerCarId = null;
 let hemiLight, sunLight, grassMat;   // updated each frame by the biome engine
+let playerLight;                     // single spotlight: the player's own headlights at night
 let ready3d = false;
 const CAM_FOV = 55; // base camera FOV (widens with speed)
 
@@ -1391,6 +1473,7 @@ const _geo = {};
 const _paintMats = new Map();
 const _signMats = new Map();
 let _matGlass, _matTire, _matHead, _matTail, _matPlayerTail, _matShadow, _matTrunk, _matLeaf, _matPost, _matSilhouette, _matTrailer;
+let _matBeam; // additive headlight beam/pool, shared; opacity driven by nightFactor (see render)
 let _matBodyDark, _matChrome; // rocker/bumper cladding + chrome trim (grille, hubs)
 // Region scenery: cactus/rock (desert), building + glowing windows (city),
 // street lamp head (city/neon), dark neon-district body, and a small palette of
@@ -1524,6 +1607,11 @@ function initSharedAssets() {
   _geo.glass  = new THREE.BoxGeometry(1.74, 0.52, 1.72);  // (kept for the truck cab)
   _geo.wheel  = new THREE.CylinderGeometry(0.42, 0.42, 0.34, 18);
   _geo.light  = new THREE.BoxGeometry(0.42, 0.2, 0.12);
+  // Fake headlight glow (night only): a hollow cone "beam" + a flat road "pool".
+  // Both are plain additive geometry — no real lights — so a sky full of oncoming
+  // traffic stays cheap. ConeGeometry is open-ended so it reads as light, not a solid.
+  _geo.beamCone = new THREE.ConeGeometry(1.25, 6.5, 14, 1, true);
+  _geo.beamPool = new THREE.PlaneGeometry(2.6, 7);
   _geo.shadow = new THREE.CircleGeometry(1.8, 24);
   _geo.trunk  = new THREE.CylinderGeometry(0.18, 0.26, 2.2, 8);
   _geo.leaf   = new THREE.IcosahedronGeometry(1.5, 0);
@@ -1550,6 +1638,10 @@ function initSharedAssets() {
   _matTire   = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.85 });
   _matHead   = new THREE.MeshStandardMaterial({ color: 0xfff4cc, emissive: 0xffe9a0, emissiveIntensity: 0.9, roughness: 0.4 });
   _matTail   = new THREE.MeshStandardMaterial({ color: 0x5a0000, emissive: 0xff2b2b, emissiveIntensity: 0.9, roughness: 0.4 });
+  // Warm additive glow; opacity is ramped to 0 by day in render(), so beams cost
+  // nothing visually until night. depthWrite off + DoubleSide so they never occlude.
+  _matBeam   = new THREE.MeshBasicMaterial({ color: 0xfff1c4, transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: true });
   // The player's own tail lights get a dedicated material so braking can flare
   // them (a feedback channel from the chase cam) without touching traffic.
   _matPlayerTail = new THREE.MeshStandardMaterial({ color: 0x5a0000, emissive: 0xff2b2b, emissiveIntensity: 0.9, roughness: 0.4 });
@@ -1737,10 +1829,31 @@ function buildBus(color) {
   sh.rotation.x = -Math.PI / 2; sh.position.y = 0.02; sh.scale.set(1.2, 2.0, 1); g.add(sh);
   return g;
 }
+// Hang a night-only headlight glow (a forward beam cone + a pool on the road) off
+// a traffic vehicle, apex at the lamp line (frontZ) and opening forward (-Z). The
+// player car gets none of this — it faces away, so we'd never see it. Kept in
+// userData so placeTraffic can flip the whole thing on/off by night + quality.
+function addBeam(g, frontZ) {
+  const beam = new THREE.Group();
+  const cone = new THREE.Mesh(_geo.beamCone, _matBeam);
+  cone.rotation.x = Math.PI / 2;                 // lay the cone along Z, apex at +z
+  cone.position.set(0, 0.55, frontZ - 3.25);     // apex sits at frontZ, base reaches forward
+  beam.add(cone);
+  const pool = new THREE.Mesh(_geo.beamPool, _matBeam);
+  pool.rotation.x = -Math.PI / 2;                // lie flat on the tarmac
+  pool.position.set(0, 0.05, frontZ - 3.5);
+  beam.add(pool);
+  beam.visible = false;                          // off until render() decides it's night
+  g.add(beam);
+  g.userData.beam = beam;
+}
 function buildVehicle(o) {
-  if (o.kind === "truck") return buildTruck(o.color);
-  if (o.kind === "bus")   return buildBus(o.color);
-  return buildProceduralCar(o.color);
+  let g;
+  if (o.kind === "truck") g = buildTruck(o.color);
+  else if (o.kind === "bus") g = buildBus(o.color);
+  else g = buildProceduralCar(o.color);
+  addBeam(g, o.kind === "truck" ? -3.45 : o.kind === "bus" ? -3.25 : -2.22);
+  return g;
 }
 
 // One facade "block" of BWIN_COLS x BWIN_ROWS windows on a concrete wall: a
@@ -1962,6 +2075,16 @@ function initThree() {
   sunLight.position.set(-30, 90, -10);
   scene.add(sunLight);
 
+  // The player's headlights: ONE spotlight (no shadow map) aimed down the road
+  // from just above/behind the car. Intensity is 0 by day and ramps up at night,
+  // so by day it costs only its (small) shader slot and emits nothing. Added once
+  // here — never added/removed — so it never triggers a shader recompile hitch.
+  playerLight = new THREE.SpotLight(0xfff2d0, 0, 80, Math.PI / 7, 0.55, 1.0);
+  playerLight.position.set(0, 4.5, 4);
+  playerLight.target.position.set(0, 0, -34);
+  scene.add(playerLight);
+  scene.add(playerLight.target);
+
   initSharedAssets();
 
   grassMat = new THREE.MeshStandardMaterial({ color: 0x2f9e44, roughness: 1 });
@@ -2055,6 +2178,7 @@ function placeTraffic(o) {
     for (const m of ud.blinkR) m.visible = litR;
     for (const m of ud.blinkL) m.visible = litL;
   }
+  if (ud.beam) ud.beam.visible = _beamsOn; // night + High quality (set once per frame in render)
 }
 
 // Add/remove Three meshes so they mirror the game's traffic/scenery arrays.
@@ -2127,16 +2251,16 @@ function applyBiome(km) {
   scene.background = _biomeSky;        // background tracks the live sky color
   scene.fog.color.copy(_biomeSky);     // Fog keeps its own Color, so copy into it
   scene.fog.near = mix(a.fogNear, b.fogNear);
-  // Quieter road sees further; rain & fog-bank events pull the horizon in.
-  const fogMul = Math.max(0.4, 1 - 0.3 * state.rain - (state.event && state.event.id === "fog" ? 0.45 : 0));
-  scene.fog.far  = mix(a.fogFar,  b.fogFar) * densityCfg().sight * fogMul;
+  // Quieter road sees further; high heat pulls the horizon in (less reaction time).
+  const heatSight = state.running ? Math.max(0.5, 1 - HEAT_FOG * state.heat) : 1;
+  scene.fog.far  = mix(a.fogFar,  b.fogFar) * densityCfg().sight * heatSight;
 
   hemiLight.color.set(a.hemiSky).lerp(_biomeTmp.set(b.hemiSky), t);
   hemiLight.groundColor.set(a.hemiGround).lerp(_biomeTmp.set(b.hemiGround), t);
   hemiLight.intensity = mix(a.hemiInt, b.hemiInt);
 
   sunLight.color.set(a.sunColor).lerp(_biomeTmp.set(b.sunColor), t);
-  sunLight.intensity = mix(a.sunInt, b.sunInt) * (1 - 0.35 * state.rain); // overcast in rain
+  sunLight.intensity = mix(a.sunInt, b.sunInt);
 
   grassMat.color.set(a.grass).lerp(_biomeTmp.set(b.grass), t);
 
@@ -2170,6 +2294,11 @@ function render() {
   roadTex.offset.y = -(state.position * Z_SCALE) * (ROAD_REPEAT / ROAD_LEN); // scroll markings
 
   _blinkOn = Math.floor(performance.now() / 280) % 2 === 0; // ~1.8 Hz signal flash
+  // Headlight beams fade in through dusk and only on High quality. One shared
+  // opacity drives every car's glow; placeTraffic flips the meshes on/off.
+  const beamK = clamp((nightFactor - 0.1) / 0.35, 0, 1);
+  _beamsOn = quality === "high" && beamK > 0;
+  _matBeam.opacity = 0.34 * beamK;
   reconcile(trafficGroup, traffic, buildVehicle, placeTraffic);
   reconcile(sceneryGroup, scenery, makeScenery, (o) => {
     placeOnRoad(o);
@@ -2191,6 +2320,13 @@ function render() {
       const tailTarget = input.brake > 0 ? tailBase * 3.4 : tailBase;
       _matPlayerTail.emissiveIntensity += (tailTarget - _matPlayerTail.emissiveIntensity) * 0.4;
     }
+  }
+  // Player headlights: track the car's lane and burn brighter the darker it gets.
+  if (playerLight) {
+    const px = worldX(state.playerX);
+    playerLight.position.x = px;
+    playerLight.target.position.x = px;
+    playerLight.intensity = nightFactor * 14;   // 0 by day, full beam at deep night
   }
 
   // Speed sells itself: FOV widens with pace, the camera shakes a touch at
@@ -2215,29 +2351,6 @@ const _rays = Array.from({ length: 56 }, () => {
   const side = Math.cos(a);                 // emphasise rays pointing left/right
   return { ang: a, len: 0.5 + Math.random() * 0.9, phase: Math.random(), w: 0.4 + Math.abs(side) * 0.6 };
 });
-
-// Stable set of falling raindrops (normalised positions); animated by time so
-// drawRain mutates nothing. A 2D overlay — no 3D particles, so it's cheap.
-const _drops = Array.from({ length: 150 }, () => ({
-  x: Math.random(), y0: Math.random(), sp: 0.7 + Math.random() * 0.8, len: 0.04 + Math.random() * 0.05,
-}));
-function drawRain(W, H, k) {
-  const t = performance.now() / 1000;
-  const slant = 0.14;
-  fxCtx.strokeStyle = `rgba(200,218,240,${0.4 * k})`;
-  fxCtx.lineWidth = 1.2;
-  fxCtx.beginPath();
-  for (const d of _drops) {
-    const y = ((d.y0 + t * d.sp) % 1) * H;
-    const x = d.x * W;
-    const len = d.len * H * (0.5 + 0.5 * k);
-    fxCtx.moveTo(x, y);
-    fxCtx.lineTo(x - slant * len, y + len);
-  }
-  fxCtx.stroke();
-  fxCtx.fillStyle = `rgba(34,40,52,${0.16 * k})`; // cool wash to darken the scene
-  fxCtx.fillRect(0, 0, W, H);
-}
 
 // Radial motion streaks + a peripheral vignette that grow with pace, so high
 // speed reads as speed even on a straight road. Center stays clear.
@@ -2274,7 +2387,6 @@ function drawFx(sf = 0) {
 
   const spd = clamp((sf - 0.5) / 0.5, 0, 1);   // streaks fade in past half speed
   if (spd > 0.01 && quality === "high") drawSpeedFx(W, H, spd); // skip eye-candy on Low
-  if (state.rain > 0.03 && quality === "high") drawRain(W, H, state.rain);
 
   if (state.slowmoT > 0) {                      // bullet-time: cyan time-bend vignette
     const k = state.slowmoT / SLOWMO_MS;
@@ -2509,7 +2621,7 @@ function resetRunState() {
   state.kick = 0; state.flashHue = 0; state.whiteout = 0;
   state.slowmoT = 0; state.slowmoCD = 0;
   state.shield = false; state.shieldCharge = 0; state.invuln = 0;
-  state.event = null; state.eventCD = 500; state.rain = 0;
+  state.heat = 0; state.heatStage = 1;
   traffic = [];
   scenery = [];
   popups = [];
@@ -2544,7 +2656,6 @@ function quitRun() { endRun(false, true); }    // chose to stop (Esc) -> straigh
 function endRun(crashed, toHome) {
   if (!state.running) return;
   state.running = false;
-  state.event = null; state.rain = 0; // don't carry weather onto the menu hero
   if (audio) audio.engineGain.gain.setTargetAtTime(0, audio.ac.currentTime, 0.1);
   if (crashed) {
     audioCrash();
@@ -2558,6 +2669,20 @@ function endRun(crashed, toHome) {
   bank += lastEarned;
   const isHi = state.score > highScore;
   if (isHi) highScore = state.score;
+  // Roll this run into the lifetime career totals (the progression ladder grinds
+  // against these). Sums accumulate; best* keep your single-run records.
+  career.runs += 1;
+  career.dist += state.position / DIST_DIV;
+  career.passed += state.passed;
+  career.scoreTotal += state.score;
+  career.slowmos += state.runSlowmos;
+  career.shields += state.runShields;
+  career.bestScore = Math.max(career.bestScore, state.score);
+  career.bestPassed = Math.max(career.bestPassed, state.passed);
+  career.bestDist = Math.max(career.bestDist, state.position / DIST_DIV);
+  career.bestCombo = Math.max(career.bestCombo, state.maxCombo);
+  career.bestSpeed = Math.max(career.bestSpeed, state.topSpeed);
+  career.bestSlowmos = Math.max(career.bestSlowmos, state.runSlowmos);
   goalsJustDone = trackGoals(); // may add goal rewards to the bank too
   saveProgress();
 
@@ -2705,7 +2830,7 @@ function showMenu() {
   overlay.innerHTML = `
     <div class="home-top">
       <h1 class="home-logo">TRAFFIC <span>RACER</span></h1>
-      <p class="home-stats">${walletPill("menu-credits")} &nbsp;·&nbsp; <span class="best">${ico("ico-trophy")} ${fmt(highScore)}</span> &nbsp;·&nbsp; <span class="best">${ico("ico-car")} ${owned.length}/${CARS.length}</span></p>
+      <p class="home-stats">${walletPill("menu-credits")} &nbsp;·&nbsp; <span class="best">${ico("ico-trophy")} ${fmt(highScore)}</span> &nbsp;·&nbsp; <span class="best">${ico("ico-car")} ${owned.length}/${CARS.length}</span> &nbsp;·&nbsp; <span class="best">${careerRank()}</span></p>
       ${goalsPanelHTML()}
     </div>
     <div class="home-bottom">
@@ -2754,8 +2879,9 @@ function setQuality(q) {
   saveProgress();
 }
 
-// The progression ladder, rendered into the menu overlay. Tiers unlock in
-// order; each row shows its reward, or a check once cleared.
+// The progression ladder, rendered into the menu overlay. Tiers unlock in order;
+// each unlocked, unfinished row shows a live progress bar (best run for skill
+// feats, lifetime total for grind goals), its reward, or a check once cleared.
 function openChallenges() {
   const overlay = document.getElementById("overlay");
   const tiers = CHALLENGES.map((tier, i) => {
@@ -2764,9 +2890,18 @@ function openChallenges() {
       const done = chalDone(it.id);
       const icon = done ? ico("ico-check") : unlocked ? ico("ico-trophy") : ico("ico-lock");
       const rew = done ? `${ico("ico-check")} Done` : `${CRED_ICO} ${fmt(it.reward)}`;
+      // Progress only matters for an unlocked, not-yet-cleared challenge.
+      let prog = "";
+      if (unlocked && !done) {
+        const f = CHAL_FIELDS[it.field];
+        const val = chalValue(it.field, _ZERO_R);
+        const pct = Math.round(clamp(val / it.target, 0, 1) * 100);
+        prog = `<div class="chal-bar"><i style="width:${pct}%"></i></div>
+          <span class="chal-prog">${f.fmt(Math.min(val, it.target))} / ${f.fmt(it.target)}</span>`;
+      }
       return `<div class="chal ${done ? "done" : ""}${unlocked ? "" : " locked"}">
         <span class="chal-ico">${icon}</span>
-        <span class="chal-desc">${_chalDesc(it)}</span>
+        <div class="chal-main"><span class="chal-desc">${_chalDesc(it)}</span>${prog}</div>
         <span class="chal-rew">${rew}</span>
       </div>`;
     }).join("");
@@ -2778,7 +2913,7 @@ function openChallenges() {
   }).join("");
   overlay.innerHTML = `
     <div class="chal-screen">
-      <h2>Challenges</h2>
+      <h2>Challenges <span class="chal-rank">${ico("ico-trophy")} ${careerRank()}</span></h2>
       <div class="chal-list">${tiers}</div>
       <button id="chal-back">Back</button>
     </div>`;

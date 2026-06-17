@@ -123,6 +123,23 @@ body.playing #biome { display: block; }
 #score { font-family: var(--font-display); font-size: 30px; font-weight: 800; letter-spacing: 0.5px; }
 .hud-dist { font-size: 13px; opacity: 0.75; font-weight: 600; }
 
+/* Heat readout: hidden during the stage-1 warmup, then fades in. Glows hotter
+   (amber) as a reminder the road is escalating and the score multiplier is up. */
+.hud-heat {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 0.6px;
+  color: #ff8a3d;
+}
+.hud-heat.on { display: flex; }
+.hud-heat .ico { width: 15px; height: 15px; filter: drop-shadow(0 0 5px rgba(255, 120, 40, 0.7)); }
+.hud-heat #heat-mult { color: #ffd166; opacity: 0.95; }
+
 /* Shield charge: a dim shield icon + a thin meter while charging; lights up
    cyan and pulses once armed (the held shield that auto-saves a fatal hit). */
 .shield { display: flex; align-items: center; gap: 6px; margin-top: 5px; color: var(--text-dim); }
@@ -377,6 +394,36 @@ button:disabled {
 .chal.done .chal-ico { color: #5ef0b0; }
 .chal.done .chal-rew { color: #5ef0b0; }
 .chal.locked .chal-desc { color: var(--text-dim); }
+/* Stacked desc + progress bar so grind/skill challenges show how far along you are */
+.chal-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.chal-bar {
+  height: 5px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.chal-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #06d6a0, #ffd166);
+  transition: width 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.chal-prog { font-size: 10.5px; color: var(--text-dim); }
+/* Current career rank chip in the Challenges header */
+.chal-rank {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--gold);
+  vertical-align: middle;
+  margin-left: 8px;
+}
+.chal-rank .ico { width: 15px; height: 15px; }
 
 /* ---- Traffic-mode segmented toggle ---- */
 .mode-toggle {
@@ -1168,6 +1215,9 @@ body.touch.playing #mute { left: 50%; bottom: 16px; transform: translateX(6px); 
 @keyframes toast-out { to { opacity: 0; transform: translateY(-10px); } }
 .toast-ico { display: inline-flex; color: #5ef0b0; }
 .toast-ico.evt { color: var(--accent); }
+.toast-ico.heat { color: #ff8a3d; filter: drop-shadow(0 0 6px rgba(255, 120, 40, 0.7)); }
+.toast.heat { border-color: rgba(255, 138, 61, 0.45); }
+.toast.heat .toast-body b { color: #ff8a3d; }
 .toast-ico .ico { width: 18px; height: 18px; }
 .toast-body { display: flex; flex-direction: column; line-height: 1.25; text-align: left; }
 .toast-body b { font-size: 13px; color: #ffd166; }
