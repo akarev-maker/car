@@ -22,7 +22,7 @@ export let selectedEnv = "plains";  // the environment the next run takes place 
 export let challengesDone = [];     // ids of completed progression challenges
 export let trafficMode = "twoway";  // "oneway" | "twoway"
 export let trafficDensity = "medium"; // "low" | "medium" | "high"
-export let viewDist = "far";        // "near" | "normal" | "far" — how far you see + cars spawn
+export let viewDist = "normal";     // "near" | "normal" | "far" — how far you see + cars spawn
 export let gameMode = "heat";       // run mode: "cruise" (flat) | "heat" (escalates) | "pursuit" (cops)
 export let pursuit = false;         // derived: gameMode === "pursuit" (kept for existing call sites)
 export let speedUnit = "mph";       // "kmh" | "mph" — display only
@@ -174,7 +174,7 @@ export function loadProgress() {
     if (gameMode !== "cruise" && gameMode !== "pursuit") gameMode = "heat";
     pursuit = gameMode === "pursuit";
     trafficDensity = TRAFFIC_DENSITY[localStorage.getItem("tr_density")] ? localStorage.getItem("tr_density") : "medium";
-    viewDist = VIEW_DISTANCE[localStorage.getItem("tr_view")] ? localStorage.getItem("tr_view") : "far";
+    viewDist = VIEW_DISTANCE[localStorage.getItem("tr_view")] ? localStorage.getItem("tr_view") : "normal";
     speedUnit = localStorage.getItem("tr_unit") === "kmh" ? "kmh" : "mph"; // default mph for new players
     quality = localStorage.getItem("tr_quality") === "low" ? "low" : "high";
     muted = localStorage.getItem("tr_muted") === "1";
