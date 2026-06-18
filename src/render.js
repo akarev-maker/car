@@ -147,6 +147,12 @@ function buildCarGeoSet(p) {
     _at(_geo.mstalk, [-1.06 * W, p.bodyY + 0.50, p.cabinZ - 0.78 * p.cabinLen]),
     _at(_geo.mirror, [ 1.18 * W, p.bodyY + 0.52, p.cabinZ - 0.82 * p.cabinLen]),
     _at(_geo.mirror, [-1.18 * W, p.bodyY + 0.52, p.cabinZ - 0.82 * p.cabinLen]),
+    // Hood vent + B-pillars (break up the greenhouse so the glass reads as windows).
+    _at(_geo.hvent,  [0, p.bodyY + 0.33, p.hoodZ]),
+    _at(_geo.pillar, [ 0.83 * W, p.roofY - 0.16, p.cabinZ + 0.08]),
+    _at(_geo.pillar, [-0.83 * W, p.roofY - 0.16, p.cabinZ + 0.08]),
+    // Rear diffuser: a row of fins under the back bumper.
+    ...[-0.46, -0.155, 0.155, 0.46].map((fx) => _at(_geo.diffin, [fx * W, 0.33, p.bumperR + 0.05])),
   ]);
   const glass = merge([
     _at(_geo.glassF, [0, p.roofY - 0.16, p.cabinZ - 0.98 * p.cabinLen], [0.62, 0, 0],  [W, 1, 1]),
@@ -164,7 +170,9 @@ function buildCarGeoSet(p) {
     profile: p,
     paint, dark, glass,
     wheels: merge(wheels),
-    chrome: merge([...hubs, _at(_geo.grille, [0, 0.66, p.bumperF - 0.12])]),
+    chrome: merge([...hubs, _at(_geo.grille, [0, 0.66, p.bumperF - 0.12]),
+      _at(_geo.exhaust, [ 0.6 * W, 0.4, p.bumperR + 0.2], [Math.PI / 2, 0, 0]),   // twin tailpipes
+      _at(_geo.exhaust, [-0.6 * W, 0.4, p.bumperR + 0.2], [Math.PI / 2, 0, 0])]),
     head:   merge([_at(_geo.light, [0.64 * W, 0.68, p.bumperF - 0.10]), _at(_geo.light, [-0.64 * W, 0.68, p.bumperF - 0.10])]),
     tail:   merge([_at(_geo.light, [0.64 * W, 0.74, p.bumperR + 0.10]), _at(_geo.light, [-0.64 * W, 0.74, p.bumperR + 0.10])]),
     blinkR: merge([_at(_geo.blinker, [0.95 * W, 0.74, p.bumperF + 0.12]), _at(_geo.blinker, [0.95 * W, 0.74, p.bumperR - 0.12])]),
@@ -192,6 +200,11 @@ function initSharedAssets() {
   _geo.spoiler = new THREE.BoxGeometry(1.66, 0.07, 0.34); // subtle rear lip
   _geo.mirror  = new THREE.BoxGeometry(0.2, 0.13, 0.16);   // wing mirror housing
   _geo.mstalk  = new THREE.BoxGeometry(0.12, 0.05, 0.07);  // mirror stalk to the door
+  // Body detail (merged per car; cheap, applies to player + traffic alike).
+  _geo.exhaust = new THREE.CylinderGeometry(0.085, 0.095, 0.22, 10); // tailpipe tip
+  _geo.diffin  = new THREE.BoxGeometry(0.055, 0.26, 0.3);  // one rear-diffuser fin
+  _geo.hvent   = new THREE.BoxGeometry(0.46, 0.07, 0.52);  // hood vent panel
+  _geo.pillar  = new THREE.BoxGeometry(0.06, 0.42, 0.1);   // B-pillar between the side windows
   // Tier-scaling aero for player cars (added per-instance in buildPlayerCar; only
   // ever one player + one showroom car, so the extra parts are essentially free).
   _geo.rocker   = new THREE.BoxGeometry(0.07, 0.11, 2.7);  // side accent blade
