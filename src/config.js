@@ -109,6 +109,36 @@ STAT_CEIL.braking = BRAKE_BASE * Math.max(...CARS.map((c) => c.brake)) * (1 + 0.
 // Rarity accent per tier (clean -> rich as cars improve).
 export const RARITY_COLOR = ["#9aa0a6", "#3aa0ff", "#ef476f", "#ffd166", "#06d6a0", "#e8d8a0"];
 
+// ---- Paint shop ----
+// A shared palette you unlock once and can apply to any owned car. "stock" is
+// always owned and uses each car's own factory colour. Finishes change the
+// material (matte/pearl/chrome), so paint is more than a hue swap. Buying a
+// paint unlocks it globally; the chosen paint is remembered per car.
+// NOTE: the scene has no environment map, so a pure metal (metalness 1) renders
+// black (nothing to reflect). Metalness is capped so the base colour always
+// reads, and clearcoat carries the "shine" — looks right in this stylised light.
+export const PAINT_FINISH = {
+  gloss:    { metalness: 0.50, roughness: 0.30, clearcoat: 1.0, clearcoatRoughness: 0.14 },
+  matte:    { metalness: 0.0,  roughness: 0.85, clearcoat: 0.0, clearcoatRoughness: 1.0 },
+  pearl:    { metalness: 0.30, roughness: 0.24, clearcoat: 1.0, clearcoatRoughness: 0.06 },
+  metallic: { metalness: 0.60, roughness: 0.34, clearcoat: 0.6, clearcoatRoughness: 0.2 },
+  chrome:   { metalness: 0.25, roughness: 0.08, clearcoat: 1.0, clearcoatRoughness: 0.03 },
+};
+export const PAINTS = [
+  { id: "stock",    name: "Stock",         price: 0,    finish: "gloss" }, // uses the car's own colour
+  { id: "red",      name: "Racing Red",    hex: "#e63946", price: 700,  finish: "gloss" },
+  { id: "blue",     name: "Electric Blue", hex: "#2a9df4", price: 700,  finish: "gloss" },
+  { id: "green",    name: "Track Green",   hex: "#2fbf71", price: 700,  finish: "gloss" },
+  { id: "orange",   name: "Sunset Orange", hex: "#ff7b29", price: 900,  finish: "gloss" },
+  { id: "violet",   name: "Ultraviolet",   hex: "#8a5cff", price: 900,  finish: "gloss" },
+  { id: "stealth",  name: "Stealth",       hex: "#1a1c22", price: 2500, finish: "matte" },
+  { id: "gunmetal", name: "Gunmetal",      hex: "#5a6470", price: 2500, finish: "matte" },
+  { id: "pearl",    name: "Pearl White",   hex: "#eef2f7", price: 3500, finish: "pearl" },
+  { id: "gold",     name: "Gold Leaf",     hex: "#d9a441", price: 6000, finish: "metallic" },
+  { id: "chrome",   name: "Liquid Chrome", hex: "#eaf0f6", price: 8000, finish: "chrome" },
+];
+export const getPaint = (id) => PAINTS.find((p) => p.id === id) || PAINTS[0];
+
 export const defaultUpgrades = () => {
   const u = {};
   for (const c of CARS) u[c.id] = { engine: 0, speed: 0, handling: 0 };

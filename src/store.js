@@ -8,7 +8,7 @@
 import {
   CARS, getCar, getEnv, ENVIRONMENTS, defaultUpgrades, defaultCareer, SPEED_UNITS,
   BRAKE_BASE, UPG_MAX, TRAFFIC_DENSITY, SPAWN_DZ, DIST_DIV, CREDIT_RATE, QUALITY_DPR,
-  CHAL_VERSION, HEAT_KM, START_LANE, clamp, fmt, ico, CRED_ICO,
+  CHAL_VERSION, HEAT_KM, START_LANE, clamp, fmt, ico, CRED_ICO, getPaint,
 } from "./config.js";
 import { audioUnlock, audioHeat } from "./audio.js";
 import { applyRoadMode, renderer, onResize } from "./render.js";
@@ -30,6 +30,8 @@ export let goals = null;            // daily goals { date, items:[...] }
 export let weekly = null;           // weekly goals, same shape
 export let career = defaultCareer(); // lifetime totals the ladder grinds against
 export let upgrades = defaultUpgrades();
+export let ownedPaints = ["stock"]; // paint ids unlocked (global; "stock" is always free)
+export let carPaint = {};           // carId -> chosen paint id (default "stock")
 export let activeCar = CARS[0];
 export let activeStats = null;       // active car's upgraded stats, set on start
 export let lastEarned = 0;           // credits from the most recent run (shown on results)
@@ -46,6 +48,17 @@ export const setActiveCar = (c) => { activeCar = c; };
 export const setActiveStats = (s) => { activeStats = s; };
 export const setLastEarned = (n) => { lastEarned = n; };
 export const setGoalsJustDone = (g) => { goalsJustDone = g; };
+
+// ---- Paint shop ----
+export const addOwnedPaint = (id) => { if (!ownedPaints.includes(id)) ownedPaints.push(id); };
+export const setCarPaint = (carId, paintId) => { carPaint[carId] = paintId; };
+export const paintIdOf = (carId) => carPaint[carId] || "stock";
+export const paintOwned = (id) => id === "stock" || ownedPaints.includes(id);
+// Resolve a car's current paint to a { color, finish } spec for rendering.
+export const paintSpecOf = (car) => {
+  const p = getPaint(paintIdOf(car.id));
+  return { color: p.id === "stock" ? car.color : p.hex, finish: p.finish || "gloss" };
+};
 
 // ---- Run state (one object, mutated in place everywhere) ----
 export const state = {
@@ -145,6 +158,8 @@ export function loadProgress() {
     muted = localStorage.getItem("tr_muted") === "1";
     highScore = parseInt(localStorage.getItem("tr_hi")) || 0;
     upgrades = JSON.parse(localStorage.getItem("tr_upg")) || {};
+    ownedPaints = JSON.parse(localStorage.getItem("tr_paints")) || ["stock"];
+    carPaint = JSON.parse(localStorage.getItem("tr_carpaint")) || {};
     goals = JSON.parse(localStorage.getItem("tr_goals")) || null;
     weekly = JSON.parse(localStorage.getItem("tr_weekly")) || null;
     career = Object.assign(defaultCareer(), JSON.parse(localStorage.getItem("tr_career")) || {});
@@ -158,6 +173,9 @@ export function loadProgress() {
   ownedEnvs = ownedEnvs.filter((id) => ENVIRONMENTS.some((e) => e.id === id));
   if (!ownedEnvs.includes("plains")) ownedEnvs.push("plains");
   if (!ownedEnvs.includes(selectedEnv)) selectedEnv = "plains";
+  if (!Array.isArray(ownedPaints)) ownedPaints = ["stock"];
+  if (!ownedPaints.includes("stock")) ownedPaints.push("stock");
+  if (!carPaint || typeof carPaint !== "object") carPaint = {};
   // Backfill any missing cars/tracks and clamp saved levels.
   const def = defaultUpgrades();
   for (const id in def) {
@@ -181,6 +199,8 @@ export function saveProgress() {
     localStorage.setItem("tr_muted", muted ? "1" : "0");
     localStorage.setItem("tr_hi", highScore);
     localStorage.setItem("tr_upg", JSON.stringify(upgrades));
+    localStorage.setItem("tr_paints", JSON.stringify(ownedPaints));
+    localStorage.setItem("tr_carpaint", JSON.stringify(carPaint));
     localStorage.setItem("tr_goals", JSON.stringify(goals));
     localStorage.setItem("tr_weekly", JSON.stringify(weekly));
     localStorage.setItem("tr_career", JSON.stringify(career));

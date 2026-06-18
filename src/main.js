@@ -5,9 +5,9 @@
 import * as THREE from "three";
 import { Reflector } from "three/addons/objects/Reflector.js";
 import {
-  CARS, COMBO_WINDOW, CREDIT_RATE, CRED_ICO, DIST_DIV, ENVIRONMENTS, HEAT_SCORE, RARITY_COLOR,
-  SLOWMO_MS, SLOWMO_SCALE, START_LANE, STAT_CEIL, UPG_MAX, UPG_TRACKS, clamp, comboMult,
-  credCost, fmt, getCar, getEnv, ico, rankFor, upgradeCost
+  CARS, COMBO_WINDOW, CREDIT_RATE, CRED_ICO, DIST_DIV, ENVIRONMENTS, HEAT_SCORE, PAINTS,
+  RARITY_COLOR, SLOWMO_MS, SLOWMO_SCALE, START_LANE, STAT_CEIL, UPG_MAX, UPG_TRACKS, clamp,
+  comboMult, credCost, fmt, getCar, getEnv, getPaint, ico, rankFor, upgradeCost
 } from "./config.js";
 import {
   CHALLENGES, CHAL_FIELDS, ZERO_R, activeCar, addBank, bank, careerRank, chalDesc,
@@ -17,7 +17,8 @@ import {
   setActiveCar, setActiveStats, setGoalsJustDone, setHighScore, setLastEarned, setQuality,
   setSelectedCar, setSelectedEnv, setSpeedUnit, setTrafficDensity, setTrafficMode, spd,
   spdLabel, speedUnit, state, tierUnlocked, trackGoals, trafficDensity, trafficMode, upgrades,
-  walletPill
+  walletPill,
+  addOwnedPaint, setCarPaint, paintIdOf, paintOwned, paintSpecOf
 } from "./store.js";
 import {
   audioCoin, audioCrash, audioDenied, audioEngine, audioTick, audioUnlock, ensureAudio,
@@ -664,9 +665,9 @@ function setStage(car) {
   pvPodium.visible = !lux;
   pvRing.visible = !lux;
   pvMirror.visible = lux;
-  pvSpot.intensity = lux ? 6 : 0;
-  pvHemi.intensity = lux ? 0.5 : 1.1;
-  pvRing.material.color.set(car.color);
+  pvSpot.intensity = lux ? 6 : 3.2; // every tier gets a key light so paint colour/finish reads true
+  pvHemi.intensity = lux ? 0.5 : 1.0;
+  pvRing.material.color.set(paintSpecOf(car).color); // accent ring follows the car's paint
   pvPodium.material.metalness = mid ? 0.85 : 0.6;
   pvPodium.material.roughness = mid ? 0.18 : 0.32;
 }
@@ -784,6 +785,7 @@ function refreshShowroom() {
     <p class="car-blurb">${c.blurb}</p>
     <div class="stats">${statBars(c)}</div>
     ${upg}
+    ${paintRowHTML(c)}
     <div class="showroom-actions">${action}</div>
   `;
 
@@ -792,6 +794,51 @@ function refreshShowroom() {
     btn.addEventListener("click", () => handleCarClick(btn.dataset.car)));
   info.querySelectorAll(".upg-btn").forEach((btn) =>
     btn.addEventListener("click", () => buyUpgrade(btn.dataset.car, btn.dataset.track)));
+  info.querySelectorAll(".paint-sw").forEach((btn) =>
+    btn.addEventListener("click", () => handlePaintClick(c.id, btn.dataset.paint)));
+}
+
+// The paint shop: a swatch per palette colour, shown only for cars you own.
+// Owned paints select instantly (live preview); locked ones show their price
+// and buy on click. "stock" is the car's own factory colour, always free.
+function paintRowHTML(car) {
+  if (!owned.includes(car.id)) return "";
+  const sel = paintIdOf(car.id);
+  const swatch = (p) => {
+    const have = paintOwned(p.id);
+    const col = p.id === "stock" ? car.color : p.hex;
+    const cls = `paint-sw fin-${p.finish}${p.id === sel ? " on" : ""}${have ? "" : " locked"}`;
+    const label = have ? p.name : `${p.name} — ${fmt(p.price)} CR`;
+    const badge = p.id === sel ? ico("ico-check") : (have ? "" : ico("ico-lock"));
+    return `<button class="${cls}" data-paint="${p.id}" style="--sw:${col}" title="${label}" aria-label="${label}">${badge}</button>`;
+  };
+  const selName = getPaint(sel).name + (sel === "stock" ? "" : " · " + getPaint(sel).finish);
+  return `<div class="paint-shop">
+    <div class="paint-head"><span>PAINT</span><span class="paint-name">${selName}</span></div>
+    <div class="paint-swatches">${PAINTS.map(swatch).join("")}</div>
+  </div>`;
+}
+
+function handlePaintClick(carId, paintId) {
+  const p = getPaint(paintId);
+  if (paintOwned(paintId)) {
+    setCarPaint(carId, paintId);
+    audioTick();
+  } else if (bank >= p.price) {
+    const btn = document.querySelector(`.paint-sw[data-paint="${paintId}"]`);
+    addBank(-p.price);
+    addOwnedPaint(paintId);
+    setCarPaint(carId, paintId);
+    audioUnlock();
+    floatDelta(btn, `- ${fmt(p.price)}`, "spend");
+  } else {
+    audioDenied();
+    return;
+  }
+  saveProgress();
+  updateGarageBank();
+  refreshShowroom(); // re-render swatches + rebuild the preview in the new paint
+  showMenu();        // refresh the wallet on the menu behind
 }
 
 function buyUpgrade(carId, trackKey) {

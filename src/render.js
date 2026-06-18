@@ -6,11 +6,11 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import {
-  CARS, DAYNIGHT_CYCLE_KM, DIST_DIV, HEAT_FOG, RARITY_COLOR, ROAD_HALF_W, ROAD_LEN,
+  CARS, DAYNIGHT_CYCLE_KM, DIST_DIV, HEAT_FOG, PAINT_FINISH, RARITY_COLOR, ROAD_HALF_W, ROAD_LEN,
   ROAD_REPEAT, SLOWMO_MS, Z_SCALE, clamp, getCar, getEnv, smoothstep, worldX, worldZ
 } from "./config.js";
 import {
-  densityCfg, input, quality, qualityCap, selectedCar, selectedEnv, spd, state, trafficMode
+  densityCfg, input, paintSpecOf, quality, qualityCap, selectedCar, selectedEnv, spd, state, trafficMode
 } from "./store.js";
 import {
   popups, rings, scenery, traffic
@@ -142,6 +142,11 @@ function buildCarGeoSet(p) {
     _at(_geo.bumper,  [0, 0.48, p.bumperF],    [0, 0, 0], [W, 1, 1]),
     _at(_geo.bumper,  [0, 0.48, p.bumperR],    [0, 0, 0], [W, 1, 1]),
     _at(_geo.spoiler, [0, 0.98, p.deckZ + 0.54]),
+    // Wing mirrors (stalk + housing) at the front of the doors, both sides.
+    _at(_geo.mstalk, [ 1.06 * W, p.bodyY + 0.50, p.cabinZ - 0.78 * p.cabinLen]),
+    _at(_geo.mstalk, [-1.06 * W, p.bodyY + 0.50, p.cabinZ - 0.78 * p.cabinLen]),
+    _at(_geo.mirror, [ 1.18 * W, p.bodyY + 0.52, p.cabinZ - 0.82 * p.cabinLen]),
+    _at(_geo.mirror, [-1.18 * W, p.bodyY + 0.52, p.cabinZ - 0.82 * p.cabinLen]),
   ]);
   const glass = merge([
     _at(_geo.glassF, [0, p.roofY - 0.16, p.cabinZ - 0.98 * p.cabinLen], [0.62, 0, 0],  [W, 1, 1]),
@@ -185,6 +190,8 @@ function initSharedAssets() {
   _geo.grille  = new THREE.BoxGeometry(1.2, 0.22, 0.12);  // grille slab
   _geo.hub     = new THREE.CylinderGeometry(0.17, 0.17, 0.36, 12); // wheel hub cap
   _geo.spoiler = new THREE.BoxGeometry(1.66, 0.07, 0.34); // subtle rear lip
+  _geo.mirror  = new THREE.BoxGeometry(0.2, 0.13, 0.16);   // wing mirror housing
+  _geo.mstalk  = new THREE.BoxGeometry(0.12, 0.05, 0.07);  // mirror stalk to the door
   // Tier-scaling aero for player cars (added per-instance in buildPlayerCar; only
   // ever one player + one showroom car, so the extra parts are essentially free).
   _geo.rocker   = new THREE.BoxGeometry(0.07, 0.11, 2.7);  // side accent blade
@@ -287,12 +294,13 @@ function paintMat(color) {
 // Glossy show-car finish reserved for the player's car (clearcoat is a touch
 // heavier, but only one player + one showroom car ever use it).
 const _playerPaintMats = new Map();
-function playerPaintMat(color) {
-  if (!_playerPaintMats.has(color))
-    _playerPaintMats.set(color, new THREE.MeshPhysicalMaterial({
-      color, metalness: 0.6, roughness: 0.26, clearcoat: 1.0, clearcoatRoughness: 0.14,
-    }));
-  return _playerPaintMats.get(color);
+function playerPaintMat(color, finish = "gloss") {
+  const key = color + "|" + finish;
+  if (!_playerPaintMats.has(key)) {
+    const f = PAINT_FINISH[finish] || PAINT_FINISH.gloss;
+    _playerPaintMats.set(key, new THREE.MeshPhysicalMaterial({ color, ...f }));
+  }
+  return _playerPaintMats.get(key);
 }
 // Tier accent (rocker blades, wing, brake rims) — drawn in the car's rarity color.
 const _accentMats = new Map();
@@ -312,7 +320,8 @@ export function buildPlayerCar(car) {
   const g = buildProceduralCar(car.color, set);
   const tier = car.tier || 0;
   const acc = accentMat(RARITY_COLOR[tier] || car.color);
-  g.getObjectByName("paint").material = playerPaintMat(car.color);
+  const paint = paintSpecOf(car); // selected paint colour + finish (defaults to the car's stock)
+  g.getObjectByName("paint").material = playerPaintMat(paint.color, paint.finish);
   g.getObjectByName("tail").material = _matPlayerTail; // brake lights flare on braking (see render)
 
   // Aero is placed relative to the silhouette (nose, deck, wheelbase, stance) so
