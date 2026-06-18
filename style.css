@@ -152,6 +152,23 @@ body.playing #biome { display: block; }
 .shield.armed .shield-bar i { box-shadow: 0 0 8px var(--accent); }
 @keyframes shield-pulse { 0%, 100% { opacity: 0.7; } 50% { opacity: 1; } }
 
+/* Bust / WANTED meter: only shown in Police Pursuit mode. Fills red as the
+   chase closes in; flashes when you're about to be busted. */
+.bust { display: none; align-items: center; gap: 6px; margin-top: 5px; color: #ff7a7a; }
+.bust.on { display: flex; }
+.bust .ico { width: 15px; height: 15px; filter: drop-shadow(0 0 5px rgba(255, 60, 60, 0.7)); }
+.bust-label { font-size: 10px; font-weight: 800; letter-spacing: 1.2px; opacity: 0.85; }
+.bust-bar { width: 70px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.16); overflow: hidden; }
+.bust-bar i { display: block; height: 100%; width: 0%; border-radius: 3px;
+  background: linear-gradient(90deg, #ffd166, #ff3b3b); transition: width 0.12s linear; }
+.bust.hot { animation: bust-flash 0.5s steps(2, end) infinite; }
+.bust.hot .bust-bar i { box-shadow: 0 0 10px #ff3b3b; }
+@keyframes bust-flash { 0% { color: #ff3b3b; } 50% { color: #4aa3ff; } }
+
+/* Pursuit "BUSTED" results card accent. */
+.results-card.busted .results-rank { color: #ff5a5a; background: rgba(255, 60, 60, 0.14); border-color: rgba(255, 60, 60, 0.5); }
+.results-card.busted .results-title { color: #ff6b6b; }
+
 /* combo meter (top-center) */
 #combo {
   align-self: center;

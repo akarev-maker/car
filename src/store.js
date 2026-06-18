@@ -22,6 +22,7 @@ export let selectedEnv = "plains";  // the environment the next run takes place 
 export let challengesDone = [];     // ids of completed progression challenges
 export let trafficMode = "twoway";  // "oneway" | "twoway"
 export let trafficDensity = "medium"; // "low" | "medium" | "high"
+export let pursuit = false;         // Police Pursuit mode on/off
 export let speedUnit = "mph";       // "kmh" | "mph" — display only
 export let quality = "high";        // "high" | "low"
 export let muted = false;
@@ -50,6 +51,7 @@ export const setLastEarned = (n) => { lastEarned = n; };
 export const setGoalsJustDone = (g) => { goalsJustDone = g; };
 
 // ---- Paint shop ----
+export const setPursuit = (v) => { pursuit = v; };
 export const addOwnedPaint = (id) => { if (!ownedPaints.includes(id)) ownedPaints.push(id); };
 export const setCarPaint = (carId, paintId) => { carPaint[carId] = paintId; };
 export const paintIdOf = (carId) => carPaint[carId] || "stock";
@@ -84,6 +86,8 @@ export const state = {
   invuln: 0,        // frames of phase-through after a shield save
   heat: 0,          // intra-run escalation (rises with distance; drives difficulty + score)
   heatStage: 1,     // 1 + floor(heat); the readable stage shown in the HUD / banner
+  bust: 0,          // police-pursuit meter 0..1 (only used in Pursuit mode; 1 = busted)
+  frames: 0,        // physics steps elapsed this run (used for short grace windows)
   // combo + run stats
   combo: 0,
   comboTimer: 0,    // frames remaining before the combo lapses
@@ -152,6 +156,7 @@ export function loadProgress() {
     selectedEnv = localStorage.getItem("tr_env") || "plains";
     challengesDone = JSON.parse(localStorage.getItem("tr_chal")) || [];
     trafficMode = localStorage.getItem("tr_mode") === "oneway" ? "oneway" : "twoway";
+    pursuit = localStorage.getItem("tr_pursuit") === "1";
     trafficDensity = TRAFFIC_DENSITY[localStorage.getItem("tr_density")] ? localStorage.getItem("tr_density") : "medium";
     speedUnit = localStorage.getItem("tr_unit") === "kmh" ? "kmh" : "mph"; // default mph for new players
     quality = localStorage.getItem("tr_quality") === "low" ? "low" : "high";
@@ -193,6 +198,7 @@ export function saveProgress() {
     localStorage.setItem("tr_env", selectedEnv);
     localStorage.setItem("tr_chal", JSON.stringify(challengesDone));
     localStorage.setItem("tr_mode", trafficMode);
+    localStorage.setItem("tr_pursuit", pursuit ? "1" : "0");
     localStorage.setItem("tr_density", trafficDensity);
     localStorage.setItem("tr_unit", speedUnit);
     localStorage.setItem("tr_quality", quality);

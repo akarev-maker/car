@@ -6,11 +6,11 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import {
-  CARS, DAYNIGHT_CYCLE_KM, DIST_DIV, HEAT_FOG, PAINT_FINISH, RARITY_COLOR, ROAD_HALF_W, ROAD_LEN,
-  ROAD_REPEAT, SLOWMO_MS, Z_SCALE, clamp, getCar, getEnv, smoothstep, worldX, worldZ
+  CARS, COP_BODY, DAYNIGHT_CYCLE_KM, DIST_DIV, HEAT_FOG, PAINT_FINISH, RARITY_COLOR, ROAD_HALF_W,
+  ROAD_LEN, ROAD_REPEAT, SLOWMO_MS, Z_SCALE, clamp, getCar, getEnv, smoothstep, worldX, worldZ
 } from "./config.js";
 import {
-  densityCfg, input, paintSpecOf, quality, qualityCap, selectedCar, selectedEnv, spd, state, trafficMode
+  densityCfg, input, paintSpecOf, pursuit, quality, qualityCap, selectedCar, selectedEnv, spd, state, trafficMode
 } from "./store.js";
 import {
   popups, rings, scenery, traffic
@@ -26,6 +26,7 @@ const canvas = document.getElementById("game"); // the WebGL <canvas> (see index
 export let scene, camera, renderer, fx, fxCtx, roadTex;
 let roadTexOne, roadTexTwo, roadMat; // one-way / two-way road textures + shared material
 let _blinkOn = true; // shared on/off phase so all active turn signals flash in sync
+let _copPhase = false; // faster on/off phase for cop light bars (set each frame in render)
 
 // Point the road at the texture for the current traffic mode.
 export function applyRoadMode() {
@@ -69,6 +70,8 @@ let _matBodyDark, _matChrome; // rocker/bumper cladding + chrome trim (grille, h
 let _matCactus, _matRock, _matWindow, _matLamp, _matNeonBody;
 let _neonMats = [];
 const _matBlinker = new THREE.MeshBasicMaterial({ color: 0xffae2b }); // bright amber, blinks via visibility
+const _matCopRed  = new THREE.MeshBasicMaterial({ color: 0xff2b2b }); // cop light bar (alternates with blue)
+const _matCopBlue = new THREE.MeshBasicMaterial({ color: 0x3a6bff });
 
 // ---- Per-car silhouettes -------------------------------------------------
 // A car's body is composed from the shared base slabs at positions/scales given
@@ -227,6 +230,7 @@ function initSharedAssets() {
   _geo.busStripe    = new THREE.BoxGeometry(2.14, 0.55, 5.4);
   _geo.bigWheel     = new THREE.CylinderGeometry(0.5, 0.5, 0.4, 16);
   _geo.blinker      = new THREE.BoxGeometry(0.18, 0.16, 0.18);
+  _geo.copbar       = new THREE.BoxGeometry(0.36, 0.11, 0.26); // one half of a cop roof light bar
   // Region scenery (desert / city / neon). Buildings are a unit cube scaled per
   // instance; lamp + neon parts are scaled too, so a handful of geos cover all.
   _geo.cactusBody = new THREE.CylinderGeometry(0.42, 0.58, 3.2, 8);
@@ -428,7 +432,21 @@ function buildBus(color) {
   g.add(new THREE.Mesh(_geo.busTail, _matTail));
   return g;
 }
+// A police cruiser: the default car body in a dark livery + a roof light bar
+// whose red/blue halves alternate (flashed in placeTraffic). Pursuit mode only.
+function buildCopCar() {
+  const g = buildProceduralCar(COP_BODY, _defaultCarGeo, false);
+  const p = _defaultCarGeo.profile;
+  const red = new THREE.Mesh(_geo.copbar, _matCopRed);
+  red.position.set(-0.19, p.roofY + 0.3, p.roofZ - 0.04);
+  const blue = new THREE.Mesh(_geo.copbar, _matCopBlue);
+  blue.position.set(0.19, p.roofY + 0.3, p.roofZ - 0.04);
+  g.add(red); g.add(blue);
+  g.userData.copLights = { red, blue };
+  return g;
+}
 function buildVehicle(o) {
+  if (o.cop) return buildCopCar();
   if (o.kind === "truck") return buildTruck(o.color);
   if (o.kind === "bus") return buildBus(o.color);
   return buildProceduralCar(o.color, _defaultCarGeo, false); // traffic: no contact-shadow disc
@@ -756,6 +774,10 @@ function placeTraffic(o) {
     for (const m of ud.blinkR) m.visible = litR;
     for (const m of ud.blinkL) m.visible = litL;
   }
+  if (ud.copLights) {                       // alternate the red/blue halves (~4 Hz)
+    ud.copLights.red.visible = _copPhase;
+    ud.copLights.blue.visible = !_copPhase;
+  }
 }
 
 // Add/remove Three meshes so they mirror the game's traffic/scenery arrays.
@@ -870,6 +892,7 @@ export function render() {
   roadTex.offset.y = -(state.position * Z_SCALE) * (ROAD_REPEAT / ROAD_LEN); // scroll markings
 
   _blinkOn = Math.floor(performance.now() / 280) % 2 === 0; // ~1.8 Hz signal flash
+  _copPhase = Math.floor(performance.now() / 130) % 2 === 0; // ~3.8 Hz cop light alternation
   reconcile(trafficGroup, traffic, buildVehicle, placeTraffic);
   reconcile(sceneryGroup, scenery, makeScenery, (o) => {
     placeOnRoad(o);
@@ -973,6 +996,17 @@ function drawFx(sf = 0) {
     fxCtx.fillRect(0, 0, W, H);
   }
   if (state.whiteout > 0.02) drawCrash(W, H, state.whiteout); // crash blowout + cracks
+
+  // Pursuit: a red/blue siren vignette pulses in as the bust meter climbs.
+  if (pursuit && state.bust > 0.45) {
+    const k = (state.bust - 0.45) / 0.55;        // 0..1 intensity
+    const col = _copPhase ? "255,50,50" : "70,120,255";
+    const g = fxCtx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.92);
+    g.addColorStop(0, `rgba(${col},0)`);
+    g.addColorStop(1, `rgba(${col},${0.4 * k})`);
+    fxCtx.fillStyle = g;
+    fxCtx.fillRect(0, 0, W, H);
+  }
 
   if (state.flash > 0.02) {                    // near-miss edge pulse, gold -> white-hot
     const h = state.flashHue;

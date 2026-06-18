@@ -182,6 +182,24 @@ export const SHIELD_INVULN = 90;        // frames (~1.5s) of phasing after a sav
 export const DIST_DIV = 16000;     // game-units per displayed "km"
 export const CREDIT_RATE = 0.125;  // credits earned = score x this
 
+// ---- Police Pursuit (optional mode) ----
+// A bust meter (0..1) is the "behind you" pressure. It fills over time (faster
+// the deeper you are), faster still when you crawl; high speed + clean near-miss
+// evasion drain it. Clip traffic and it spikes; clip a cop and it spikes hard.
+// Fill it and you're BUSTED. Cop cars are the visible hazard you must thread.
+export const BUST_RISE = 0.0013;       // base fill / frame — climbs even flat-out, so you
+                                       // must actively thread traffic (near-misses) to survive
+export const BUST_HEAT = 0.09;         // extra fill per heat unit (cops escalate with you)
+export const BUST_SLOW = 0.0019;       // extra fill / frame when crawling (< 40% top speed)
+export const BUST_FAST_DRAIN = 0.0006; // partial drain at high speed (> 80% top speed)
+export const BUST_NEARMISS = 0.045;    // drain per near-miss (evasion cools the chase)
+export const BUST_SIDESWIPE = 0.22;    // spike when you clip traffic
+export const BUST_COPHIT = 0.45;       // spike when you clip a cop
+export const BUST_GRACE = 150;         // frames at run start with no base fill (~2.5s)
+export const COP_BODY = "#13161d";     // cop car body (dark; gets a roof light bar)
+export const COP_BASE_ODDS = 0.12;     // base chance a forward spawn is a cop
+export const COP_BUST_ODDS = 0.5;      // extra cop chance scaled by the bust meter
+
 // ---- Environments ----
 export const DAYNIGHT_CYCLE_KM = 12;   // distance for one full day->night->day lap
 export const ENVIRONMENTS = [

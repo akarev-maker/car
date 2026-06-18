@@ -17,12 +17,12 @@ import {
   setActiveCar, setActiveStats, setGoalsJustDone, setHighScore, setLastEarned, setQuality,
   setSelectedCar, setSelectedEnv, setSpeedUnit, setTrafficDensity, setTrafficMode, spd,
   spdLabel, speedUnit, state, tierUnlocked, trackGoals, trafficDensity, trafficMode, upgrades,
-  walletPill,
+  walletPill, pursuit, setPursuit,
   addOwnedPaint, setCarPaint, paintIdOf, paintOwned, paintSpecOf
 } from "./store.js";
 import {
   audioCoin, audioCrash, audioDenied, audioEngine, audioTick, audioUnlock, ensureAudio,
-  hushEngine, setEngineProfile, toggleMute
+  hushEngine, setEngineProfile, toggleMute, audioSiren
 } from "./audio.js";
 import {
   resetEntities, update, updateScenery
@@ -99,6 +99,8 @@ function cacheHUD() {
     heat: document.getElementById("heat-hud"),
     heatStage: document.getElementById("heat-stage"),
     heatMult: document.getElementById("heat-mult"),
+    bust: document.getElementById("bust-hud"),
+    bustFill: document.getElementById("bust-fill"),
   };
 }
 function updateHUD() {
@@ -125,6 +127,13 @@ function updateHUD() {
     hud.heatStage.textContent = "HEAT " + state.heatStage;
     hud.heatMult.textContent = "x" + (1 + HEAT_SCORE * state.heat).toFixed(1);
   }
+  if (hud.bust) {
+    hud.bust.classList.toggle("on", pursuit);            // only shown in Pursuit mode
+    if (pursuit) {
+      hud.bustFill.style.width = state.bust * 100 + "%";
+      hud.bust.classList.toggle("hot", state.bust > 0.66); // flashing red near the bust
+    }
+  }
 }
 
 // Freeze the game while a mobile player holds the device in portrait.
@@ -142,6 +151,7 @@ function isBlocked() {
 const FIXED_DT = 1000 / 60;   // ms per simulation step
 const MAX_STEPS = 5;          // clamp catch-up after a stall (no spiral of death)
 let _loopPrev = 0, _accum = 0;
+let _lastSiren = 0;       // last siren wail timestamp (Pursuit), for rate-limiting
 let _loopRunning = false; // guards against stacking parallel rAF chains on restart
 let paused = false;       // run is frozen but still on screen behind the pause menu
 function loop(now) {
@@ -177,6 +187,11 @@ function loop(now) {
   if (state.running && !isBlocked()) {
     updateHUD();
     audioEngine(state.speed, state.maxSpeed, input.throttle, true);
+    // Pursuit: loop the siren while the bust meter is hot (rate-limited; louder near the bust).
+    if (pursuit && state.bust > 0.5 && now - _lastSiren > 820) {
+      _lastSiren = now;
+      audioSiren(0.6 + state.bust * 0.6);
+    }
   }
   if (state.running) render();
   fpsMeter();
@@ -296,6 +311,7 @@ function resetRunState() {
   state.slowmoT = 0; state.slowmoCD = 0;
   state.shield = false; state.shieldCharge = 0; state.invuln = 0;
   state.heat = 0; state.heatStage = 1;
+  state.bust = 0; state.frames = 0;
   resetEntities(); // clears traffic/scenery/popups/rings (owned by world3d)
 }
 
@@ -319,14 +335,17 @@ function startGame() {
 }
 
 export function gameOver() { endRun(true); }          // crashed into traffic -> results
+export function getBusted() { endRun(true, false, true); } // bust meter filled (Pursuit) -> results
 function quitRun() { endRun(false, true); }    // chose to stop (Esc) -> straight home
 
 // End the current run: bank credits, record the high score, show results. A
 // crash adds the impact SFX + shake and a beat before the card; a voluntary
 // stop skips straight to it.
-function endRun(crashed, toHome) {
+let _bustedRun = false; // set when the last run ended on the bust meter (Pursuit), for the results header
+function endRun(crashed, toHome, busted = false) {
   if (!state.running) return;
   state.running = false;
+  _bustedRun = busted;
   hushEngine(0, 0.1);
   if (crashed) {
     audioCrash();
@@ -365,9 +384,9 @@ function showResults(isHi) {
   const el = document.getElementById("results");
   const stat = (k, v) => `<div class="rstat"><span>${k}</span><b>${v}</b></div>`;
   el.innerHTML = `
-    <div class="results-card">
-      <div class="results-rank rank-${r.label.toLowerCase()}">${r.label}</div>
-      <h1 class="results-title">${isHi ? "NEW BEST!" : "Run Complete"}</h1>
+    <div class="results-card${_bustedRun ? " busted" : ""}">
+      <div class="results-rank rank-${r.label.toLowerCase()}">${_bustedRun ? ico("ico-shield") : r.label}</div>
+      <h1 class="results-title">${_bustedRun ? "BUSTED!" : isHi ? "NEW BEST!" : "Run Complete"}</h1>
       <div class="results-grid">
         ${stat("Score", fmt(state.score))}
         ${stat("Distance", (state.position / DIST_DIV).toFixed(1) + " km")}
@@ -550,6 +569,7 @@ function showSettings() {
       <div class="set-row"><span class="set-label">Speed units</span>${seg("set-unit", "km/h", "mph", speedUnit === "kmh")}</div>
       <div class="set-row"><span class="set-label">Traffic</span>${seg("set-mode", "Two-way", "One-way", trafficMode === "twoway")}</div>
       <div class="set-row"><span class="set-label">Traffic density</span>${segN("set-dens", [["low", "Low"], ["medium", "Med"], ["high", "High"]], trafficDensity)}</div>
+      <div class="set-row"><span class="set-label">Police pursuit</span>${seg("set-pursuit", "On", "Off", pursuit)}</div>
       <div class="set-row"><span class="set-label">Graphics</span>${seg("set-q", "High", "Low", quality === "high")}</div>
       <div class="set-row"><span class="set-label">Sound</span>${seg("set-snd", "On", "Off", !muted)}</div>
       <button id="settings-back">Back</button>
@@ -564,6 +584,8 @@ function showSettings() {
   document.getElementById("set-mode-b").addEventListener("click", () => { setTrafficMode("oneway"); showSettings(); });
   for (const d of ["low", "medium", "high"])
     document.getElementById(`set-dens-${d}`).addEventListener("click", () => { setTrafficDensity(d); showSettings(); });
+  document.getElementById("set-pursuit-a").addEventListener("click", () => { setPursuit(true); reopen(); });
+  document.getElementById("set-pursuit-b").addEventListener("click", () => { setPursuit(false); reopen(); });
   document.getElementById("set-q-a").addEventListener("click", () => { setQuality("high"); showSettings(); });
   document.getElementById("set-q-b").addEventListener("click", () => { setQuality("low"); showSettings(); });
   document.getElementById("set-snd-a").addEventListener("click", () => { if (muted) toggleMute(); reopen(); });

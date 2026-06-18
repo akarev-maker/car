@@ -265,6 +265,20 @@ export function audioShield() { ensureAudio(); [523, 784, 1047, 1568].forEach((f
 export function audioShieldReady() { ensureAudio(); uiTone(880, 0, 0.12, "sine", 0.08); uiTone(1320, 0.09, 0.16, "sine", 0.07); }
 // Two rising notes when the road heats up — a step-up sting, brighter each stage.
 export function audioHeat(stage) { ensureAudio(); const b = 300 + Math.min(stage, 12) * 26; uiTone(b, 0, 0.12, "sawtooth", 0.06); uiTone(b * 1.5, 0.08, 0.18, "triangle", 0.07); }
+// Police siren "wee-woo": a high then low sawtooth tone. Played on a slow loop
+// while the bust meter is hot (see the game loop). Volume scales with intensity.
+export function audioSiren(intensity = 1) {
+  ensureAudio(); if (!audio) return;
+  const t = audio.ac.currentTime, vol = 0.05 * intensity;
+  for (const [f, when] of [[880, 0], [620, 0.2]]) {
+    const o = audio.ac.createOscillator(); o.type = "sawtooth"; o.frequency.value = f;
+    const g = audio.ac.createGain();
+    g.gain.setValueAtTime(0.0001, t + when);
+    g.gain.exponentialRampToValueAtTime(vol, t + when + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + when + 0.2);
+    o.connect(g).connect(audio.master); o.start(t + when); o.stop(t + when + 0.22);
+  }
+}
 export function audioCoin()   { ensureAudio(); uiTone(784, 0, 0.08, "triangle", 0.13); uiTone(1175, 0.06, 0.10, "triangle", 0.13); uiTone(1568, 0.12, 0.16, "sine", 0.10); }
 export function audioUnlock() { ensureAudio(); [523, 659, 784, 1047, 1319].forEach((f, i) => uiTone(f, i * 0.08, 0.45, "triangle", 0.11)); }
 export function audioDenied() { ensureAudio(); uiTone(150, 0, 0.14, "square", 0.08); uiTone(110, 0.07, 0.18, "square", 0.08); }
