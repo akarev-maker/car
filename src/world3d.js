@@ -280,9 +280,15 @@ export function update() {
   state.speed = clamp(state.speed, 0, state.maxSpeed);
   state.position += state.speed;
 
-  // Heat climbs with distance survived. Crossing into a new stage fires a banner.
-  // Cruise mode keeps it flat (heat 0, stage 1): steady difficulty, no escalation.
-  state.heat = gameMode === "cruise" ? 0 : heatAt();
+  // Distance survived drives escalation. `heat` is the Heat-mode-only ramp: it
+  // speeds traffic, packs spawns tighter, pulls the sightline in, and grows the
+  // score — and it fires the stage banners. Cruise and Pursuit keep heat at 0,
+  // so their traffic stays flat. `escalate` is the same curve but for the parts
+  // that should still climb in Pursuit: the bust meter and the payout. (Cruise
+  // alone stays flat across the board.)
+  const progress = heatAt();
+  state.heat = gameMode === "heat" ? progress : 0;
+  const escalate = gameMode === "cruise" ? 0 : progress;
   const stage = 1 + Math.floor(state.heat);
   if (stage > state.heatStage) { state.heatStage = stage; onHeatStage(stage); }
 
@@ -293,7 +299,7 @@ export function update() {
   state.frames++;
   if (pursuit && state.frames > BUST_GRACE) {
     const speedF = state.speed / state.maxSpeed;
-    let d = BUST_RISE * (1 + BUST_HEAT * state.heat);
+    let d = BUST_RISE * (1 + BUST_HEAT * escalate); // chase tightens the deeper you run
     if (speedF < 0.4) d += BUST_SLOW;          // crawling -> they close in
     if (speedF > 0.8) d -= BUST_FAST_DRAIN;    // flat out -> you gain ground
     state.bust = clamp(state.bust + d, 0, 1);
@@ -331,7 +337,7 @@ export function update() {
 
   // Passes/crashes happen at YOUR plane (where you see them alongside).
   const speedFactor = state.speed / state.maxSpeed;
-  const heatMult = 1 + HEAT_SCORE * state.heat; // deeper into the run pays more
+  const heatMult = 1 + HEAT_SCORE * escalate; // deeper into the run pays more (Heat + Pursuit)
   for (let i = traffic.length - 1; i >= 0; i--) {
     const car = traffic[i];
     const dz = car.z - state.position;
