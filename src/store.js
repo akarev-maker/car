@@ -10,7 +10,7 @@ import {
   BRAKE_BASE, UPG_MAX, TRAFFIC_DENSITY, VIEW_DISTANCE, SPAWN_DZ, DIST_DIV, CREDIT_RATE, QUALITY_DPR,
   CHAL_VERSION, HEAT_KM, START_LANE, clamp, fmt, ico, CRED_ICO, getPaint,
 } from "./config.js";
-import { audioUnlock, audioHeat } from "./audio.js";
+import { audioUnlock, audioHeat, audioSiren, audioCoin } from "./audio.js";
 import { applyRoadMode, renderer, onResize } from "./render.js";
 
 // ---- Persistent progress + settings (saved to localStorage) ----
@@ -92,6 +92,9 @@ export const state = {
   heat: 0,          // intra-run escalation (rises with distance; drives difficulty + score)
   heatStage: 1,     // 1 + floor(heat); the readable stage shown in the HUD / banner
   bust: 0,          // police-pursuit meter 0..1 (only used in Pursuit mode; 1 = busted)
+  chasing: false,   // Pursuit: a cruiser is actively on you (the bust meter is live)
+  chaseTimer: 0,    // Pursuit: frames until the next spotting while laying low
+  escapes: 0,       // Pursuit: chases shaken this run (scales the bounty + spawn pressure)
   frames: 0,        // physics steps elapsed this run (used for short grace windows)
   // combo + run stats
   combo: 0,
@@ -426,6 +429,23 @@ export function onHeatStage(stage) {
     `<div class="toast-body"><b>Heat ${stage}</b><span>Faster traffic · bigger score</span></div>`,
     "heat");
   audioHeat(stage);
+}
+// Pursuit: a cruiser has spotted you and the chase is on (the bust meter is live).
+export function onPursuitSpotted() {
+  showToast(
+    `<span class="toast-ico bust">${ico("ico-siren")}</span>` +
+    `<div class="toast-body"><b>Spotted!</b><span>Outrun them — floor it or thread traffic</span></div>`,
+    "bust");
+  audioSiren(1);
+}
+// Pursuit: you drained the meter and shook the chase — bank the bounty, lie low.
+export function onPursuitEvaded(reward) {
+  showToast(
+    `<span class="toast-ico bust">${ico("ico-siren")}</span>` +
+    `<div class="toast-body"><b>Lost the cops!</b><span>Bounty banked · lay low a moment</span></div>` +
+    `<span class="toast-rew">+${fmt(reward)}</span>`,
+    "evade");
+  audioCoin();
 }
 
 // ============================================================

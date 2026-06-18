@@ -13,11 +13,12 @@ import {
   SHIELD_GAIN_BASE, SHIELD_GAIN_CLOSE, SHIELD_INVULN, ENGINE_BRAKE, DRAG,
   STEER_ACCEL, STEER_FRICTION, STEER_MAX_V, PLAYER_X_LIMIT, clamp, worldX,
   BUST_RISE, BUST_HEAT, BUST_SLOW, BUST_FAST_DRAIN, BUST_NEARMISS, BUST_SIDESWIPE,
-  BUST_COPHIT, BUST_GRACE, COP_BASE_ODDS, COP_BUST_ODDS,
+  BUST_COPHIT, BUST_SEED, BUST_BOUNTY, PURSUIT_LULL, PURSUIT_LULL_RAND,
+  COP_BASE_ODDS, COP_BUST_ODDS,
 } from "./config.js";
 import {
   state, keys, input, activeStats, trafficMode, pursuit, gameMode, densityCfg, spawnAhead, heatAt,
-  checkGoalsLive, checkChallengesLive, onHeatStage,
+  checkGoalsLive, checkChallengesLive, onHeatStage, onPursuitSpotted, onPursuitEvaded,
 } from "./store.js";
 import {
   audioWhoosh, audioCombo, audioSlowmo, audioShieldReady, audioScrape, audioShield,
@@ -86,8 +87,9 @@ export function spawnVehicle(lane, dir, forceCop = false) {
 export function spawnWave() {
   const fl = fwdLanes();
   const onc = densityCfg().onc; // extra-car / oncoming odds scale with density
-  // Pursuit: dispatch extra cop cruisers as the bust meter climbs (the heat is on).
-  if (pursuit && Math.random() < 0.18 + state.bust * 0.7)
+  // Pursuit: while a chase is live, dispatch extra cruisers as the meter climbs.
+  // Once you've shaken them (laying low), the road clears of the cop swarm.
+  if (pursuit && state.chasing && Math.random() < 0.18 + state.bust * 0.7)
     spawnVehicle(fl[Math.floor(Math.random() * fl.length)], 1, true);
   if (trafficMode === "oneway") {
     // Classic: 1–3 cars across the four lanes, always leaving a gap to thread.
@@ -292,18 +294,34 @@ export function update() {
   const stage = 1 + Math.floor(state.heat);
   if (stage > state.heatStage) { state.heatStage = stage; onHeatStage(stage); }
 
-  // Police pursuit: the bust meter is the back-pressure. It fills over time
-  // (faster the deeper you are, faster still when you crawl); flat-out speed
-  // drains it, and clean near-misses (handled in the pass block) cool it. Fill
-  // it and you're busted. A short grace at the start lets you get rolling first.
+  // Police pursuit runs as a CHASE CYCLE. While a chase is live the bust meter
+  // fills (faster the deeper you are, faster still when you crawl); sustained
+  // top speed and clean near-misses (handled in the pass block) drain it. Fill
+  // it -> busted. Drain it to zero -> you've shaken them: bank a bounty and lie
+  // low until another cruiser spots you and it all kicks off again.
   state.frames++;
-  if (pursuit && state.frames > BUST_GRACE) {
-    const speedF = state.speed / state.maxSpeed;
-    let d = BUST_RISE * (1 + BUST_HEAT * escalate); // chase tightens the deeper you run
-    if (speedF < 0.4) d += BUST_SLOW;          // crawling -> they close in
-    if (speedF > 0.8) d -= BUST_FAST_DRAIN;    // flat out -> you gain ground
-    state.bust = clamp(state.bust + d, 0, 1);
-    if (state.bust >= 1) { getBusted(); return; }
+  if (pursuit) {
+    if (state.chasing) {
+      const speedF = state.speed / state.maxSpeed;
+      let d = BUST_RISE * (1 + BUST_HEAT * escalate); // chase tightens the deeper you run
+      if (speedF < 0.4) d += BUST_SLOW;          // crawling -> they close in
+      if (speedF > 0.8) d -= BUST_FAST_DRAIN;    // flat out -> you pull away (net drain)
+      state.bust = clamp(state.bust + d, 0, 1);
+      if (state.bust >= 1) { getBusted(); return; }   // caught
+      if (state.bust <= 0) {                            // shaken them off
+        state.chasing = false;
+        state.escapes++;
+        state.chaseTimer = PURSUIT_LULL + Math.floor(Math.random() * PURSUIT_LULL_RAND);
+        // Bounty grows each time you escape and the deeper into the run you are.
+        const reward = Math.round(BUST_BOUNTY * (1 + 0.5 * (state.escapes - 1)) * (1 + 0.3 * escalate));
+        state.score += reward;
+        onPursuitEvaded(reward);
+      }
+    } else if (--state.chaseTimer <= 0) {              // a cruiser spots you again
+      state.chasing = true;
+      state.bust = BUST_SEED;
+      onPursuitSpotted();
+    }
   }
 
   // Steering (handling scales with the car; grip firms up with speed)
@@ -355,14 +373,14 @@ export function update() {
         else { gameOver(); return; }            // otherwise the run ends
       } else if (lateral < LANE_TOLERANCE + tol) { // sideswipe -> survive, but punished
         sideswipe(pan);
-        if (pursuit) state.bust = clamp(state.bust + (car.cop ? BUST_COPHIT : BUST_SIDESWIPE), 0, 1);
+        if (pursuit && state.chasing) state.bust = clamp(state.bust + (car.cop ? BUST_COPHIT : BUST_SIDESWIPE), 0, 1);
       } else {                                  // clean pass
         state.passed++;
         const lo = LANE_TOLERANCE + tol;        // inner edge of the near-miss band
         let closeness = 0;
         if (lateral < NEAR_MISS_RANGE) {        // near miss: build the combo
           closeness = clamp(1 - (lateral - lo) / (NEAR_MISS_RANGE - lo), 0, 1);
-          if (pursuit) state.bust = Math.max(0, state.bust - BUST_NEARMISS * (0.5 + closeness)); // evasion cools the chase
+          if (pursuit && state.chasing) state.bust = Math.max(0, state.bust - BUST_NEARMISS * (0.5 + closeness)); // evasion cools the chase
           state.combo++;
           state.maxCombo = Math.max(state.maxCombo, state.combo);
           state.comboTimer = COMBO_WINDOW;

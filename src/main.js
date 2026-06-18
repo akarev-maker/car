@@ -5,7 +5,7 @@
 import * as THREE from "three";
 import { Reflector } from "three/addons/objects/Reflector.js";
 import {
-  CARS, COMBO_WINDOW, CREDIT_RATE, CRED_ICO, DIST_DIV, ENVIRONMENTS, HEAT_SCORE, PAINTS,
+  BUST_GRACE, CARS, COMBO_WINDOW, CREDIT_RATE, CRED_ICO, DIST_DIV, ENVIRONMENTS, HEAT_SCORE, PAINTS,
   RARITY_COLOR, SLOWMO_MS, SLOWMO_SCALE, START_LANE, STAT_CEIL, UPG_MAX, UPG_TRACKS, clamp,
   comboMult, credCost, fmt, getCar, getEnv, getPaint, ico, rankFor, upgradeCost
 } from "./config.js";
@@ -312,6 +312,8 @@ function resetRunState() {
   state.shield = false; state.shieldCharge = 0; state.invuln = 0;
   state.heat = 0; state.heatStage = 1;
   state.bust = 0; state.frames = 0;
+  // Pursuit starts calm: the first cruiser spots you after a short grace.
+  state.chasing = false; state.chaseTimer = BUST_GRACE; state.escapes = 0;
   resetEntities(); // clears traffic/scenery/popups/rings (owned by world3d)
 }
 
@@ -492,7 +494,7 @@ function showMenu() {
         ${[
           ["cruise", "Cruise", "Steady traffic, no escalation"],
           ["heat", "Heat", "Traffic gets faster the longer you survive"],
-          ["pursuit", "Pursuit", "Outrun the cops before the bust meter fills"],
+          ["pursuit", "Pursuit", "Outrun the cops for a bounty — get caught and it's over"],
         ].map(([val, label, desc]) =>
           `<button class="mode-card mode-${val} ${val === gameMode ? "on" : ""}" data-mode="${val}">
              <b>${label}</b><span>${desc}</span></button>`).join("")}

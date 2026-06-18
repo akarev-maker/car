@@ -1344,6 +1344,13 @@ body.touch.playing #mute { left: 50%; bottom: 16px; transform: translateX(6px); 
 .toast-ico.heat { color: #ff8a3d; filter: drop-shadow(0 0 6px rgba(255, 120, 40, 0.7)); }
 .toast.heat { border-color: rgba(255, 138, 61, 0.45); }
 .toast.heat .toast-body b { color: #ff8a3d; }
+/* Pursuit: red for "spotted", green-gold reward for "evaded" */
+.toast-ico.bust { color: #ff4d4d; filter: drop-shadow(0 0 6px rgba(255, 60, 60, 0.7)); }
+.toast.bust { border-color: rgba(255, 77, 77, 0.5); }
+.toast.bust .toast-body b { color: #ff5b5b; }
+.toast.evade { border-color: rgba(95, 224, 168, 0.5); }
+.toast.evade .toast-body b { color: #5fe0a8; }
+.toast.evade .toast-rew { color: #5fe0a8; }
 .toast-ico .ico { width: 18px; height: 18px; }
 .toast-body { display: flex; flex-direction: column; line-height: 1.25; text-align: left; }
 .toast-body b { font-size: 13px; color: #ffd166; }
