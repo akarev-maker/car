@@ -16,7 +16,7 @@ import {
   BUST_COPHIT, BUST_GRACE, COP_BASE_ODDS, COP_BUST_ODDS,
 } from "./config.js";
 import {
-  state, keys, input, activeStats, trafficMode, pursuit, densityCfg, spawnAhead, heatAt,
+  state, keys, input, activeStats, trafficMode, pursuit, gameMode, densityCfg, spawnAhead, heatAt,
   checkGoalsLive, checkChallengesLive, onHeatStage,
 } from "./store.js";
 import {
@@ -281,7 +281,8 @@ export function update() {
   state.position += state.speed;
 
   // Heat climbs with distance survived. Crossing into a new stage fires a banner.
-  state.heat = heatAt();
+  // Cruise mode keeps it flat (heat 0, stage 1): steady difficulty, no escalation.
+  state.heat = gameMode === "cruise" ? 0 : heatAt();
   const stage = 1 + Math.floor(state.heat);
   if (stage > state.heatStage) { state.heatStage = stage; onHeatStage(stage); }
 

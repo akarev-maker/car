@@ -17,7 +17,7 @@ import {
   setActiveCar, setActiveStats, setGoalsJustDone, setHighScore, setLastEarned, setQuality,
   setSelectedCar, setSelectedEnv, setSpeedUnit, setTrafficDensity, setTrafficMode, spd,
   spdLabel, speedUnit, state, tierUnlocked, trackGoals, trafficDensity, trafficMode, upgrades,
-  walletPill, pursuit, setPursuit,
+  walletPill, pursuit, gameMode, setGameMode,
   addOwnedPaint, setCarPaint, paintIdOf, paintOwned, paintSpecOf
 } from "./store.js";
 import {
@@ -488,6 +488,15 @@ function showMenu() {
     </div>
     <div class="home-bottom">
       <p class="home-car">Now driving · <b style="color:${car.color}">${car.name}</b> · <b class="home-env">${getEnv(selectedEnv).name}</b></p>
+      <div class="mode-select" id="mode-select">
+        ${[
+          ["cruise", "Cruise", "Steady traffic, no escalation"],
+          ["heat", "Heat", "Traffic gets faster the longer you survive"],
+          ["pursuit", "Pursuit", "Outrun the cops before the bust meter fills"],
+        ].map(([val, label, desc]) =>
+          `<button class="mode-card mode-${val} ${val === gameMode ? "on" : ""}" data-mode="${val}">
+             <b>${label}</b><span>${desc}</span></button>`).join("")}
+      </div>
       <div class="menu-btns">
         <button id="start-btn">Start</button>
         <button id="garage-btn" class="alt">Garage</button>
@@ -500,6 +509,8 @@ function showMenu() {
   `;
   overlay.classList.remove("hidden");
   document.body.classList.remove("playing");
+  overlay.querySelectorAll(".mode-card").forEach((b) =>
+    b.addEventListener("click", () => { setGameMode(b.dataset.mode); saveProgress(); showMenu(); }));
   document.getElementById("start-btn").addEventListener("click", startGame);
   document.getElementById("garage-btn").addEventListener("click", openGarage);
   document.getElementById("envs-btn").addEventListener("click", openEnvironments);
@@ -569,7 +580,6 @@ function showSettings() {
       <div class="set-row"><span class="set-label">Speed units</span>${seg("set-unit", "km/h", "mph", speedUnit === "kmh")}</div>
       <div class="set-row"><span class="set-label">Traffic</span>${seg("set-mode", "Two-way", "One-way", trafficMode === "twoway")}</div>
       <div class="set-row"><span class="set-label">Traffic density</span>${segN("set-dens", [["low", "Low"], ["medium", "Med"], ["high", "High"]], trafficDensity)}</div>
-      <div class="set-row"><span class="set-label">Police pursuit</span>${seg("set-pursuit", "On", "Off", pursuit)}</div>
       <div class="set-row"><span class="set-label">Graphics</span>${seg("set-q", "High", "Low", quality === "high")}</div>
       <div class="set-row"><span class="set-label">Sound</span>${seg("set-snd", "On", "Off", !muted)}</div>
       <button id="settings-back">Back</button>
@@ -584,8 +594,6 @@ function showSettings() {
   document.getElementById("set-mode-b").addEventListener("click", () => { setTrafficMode("oneway"); showSettings(); });
   for (const d of ["low", "medium", "high"])
     document.getElementById(`set-dens-${d}`).addEventListener("click", () => { setTrafficDensity(d); showSettings(); });
-  document.getElementById("set-pursuit-a").addEventListener("click", () => { setPursuit(true); reopen(); });
-  document.getElementById("set-pursuit-b").addEventListener("click", () => { setPursuit(false); reopen(); });
   document.getElementById("set-q-a").addEventListener("click", () => { setQuality("high"); showSettings(); });
   document.getElementById("set-q-b").addEventListener("click", () => { setQuality("low"); showSettings(); });
   document.getElementById("set-snd-a").addEventListener("click", () => { if (muted) toggleMute(); reopen(); });
