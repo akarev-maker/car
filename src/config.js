@@ -53,6 +53,15 @@ export const TRAFFIC_DENSITY = {
   high:   { label: "High",   gap: 0.58, onc: 1.4,  sight: 1.0 },
 };
 
+// ---- View distance ----
+// Player-chosen multiplier on how far you see (fog far + camera far plane) and
+// how far ahead traffic spawns. Independent of density's own `sight` scaling.
+export const VIEW_DISTANCE = {
+  near:   { label: "Near",   mult: 0.85 },
+  normal: { label: "Normal", mult: 1.0 },
+  far:    { label: "Far",    mult: 1.45 },
+};
+
 // ---- Traffic modes ----
 export const ONEWAY_LANES = [-0.8, -0.4, 0, 0.4, 0.8]; // sorted left -> right, center filled
 export const FWD_LANES = [0.25, 0.75];    // two-way: your direction (right side)

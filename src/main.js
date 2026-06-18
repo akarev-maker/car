@@ -17,7 +17,7 @@ import {
   setActiveCar, setActiveStats, setGoalsJustDone, setHighScore, setLastEarned, setQuality,
   setSelectedCar, setSelectedEnv, setSpeedUnit, setTrafficDensity, setTrafficMode, spd,
   spdLabel, speedUnit, state, tierUnlocked, trackGoals, trafficDensity, trafficMode, upgrades,
-  walletPill, pursuit, gameMode, setGameMode,
+  walletPill, pursuit, gameMode, setGameMode, viewDist, setViewDist,
   addOwnedPaint, setCarPaint, paintIdOf, paintOwned, paintSpecOf
 } from "./store.js";
 import {
@@ -580,6 +580,7 @@ function showSettings() {
       <div class="set-row"><span class="set-label">Speed units</span>${seg("set-unit", "km/h", "mph", speedUnit === "kmh")}</div>
       <div class="set-row"><span class="set-label">Traffic</span>${seg("set-mode", "Two-way", "One-way", trafficMode === "twoway")}</div>
       <div class="set-row"><span class="set-label">Traffic density</span>${segN("set-dens", [["low", "Low"], ["medium", "Med"], ["high", "High"]], trafficDensity)}</div>
+      <div class="set-row"><span class="set-label">View distance</span>${segN("set-view", [["near", "Near"], ["normal", "Normal"], ["far", "Far"]], viewDist)}</div>
       <div class="set-row"><span class="set-label">Graphics</span>${seg("set-q", "High", "Low", quality === "high")}</div>
       <div class="set-row"><span class="set-label">Sound</span>${seg("set-snd", "On", "Off", !muted)}</div>
       <button id="settings-back">Back</button>
@@ -594,6 +595,8 @@ function showSettings() {
   document.getElementById("set-mode-b").addEventListener("click", () => { setTrafficMode("oneway"); showSettings(); });
   for (const d of ["low", "medium", "high"])
     document.getElementById(`set-dens-${d}`).addEventListener("click", () => { setTrafficDensity(d); showSettings(); });
+  for (const v of ["near", "normal", "far"])
+    document.getElementById(`set-view-${v}`).addEventListener("click", () => { setViewDist(v); showSettings(); });
   document.getElementById("set-q-a").addEventListener("click", () => { setQuality("high"); showSettings(); });
   document.getElementById("set-q-b").addEventListener("click", () => { setQuality("low"); showSettings(); });
   document.getElementById("set-snd-a").addEventListener("click", () => { if (muted) toggleMute(); reopen(); });

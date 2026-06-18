@@ -7,7 +7,7 @@
 
 import {
   CARS, getCar, getEnv, ENVIRONMENTS, defaultUpgrades, defaultCareer, SPEED_UNITS,
-  BRAKE_BASE, UPG_MAX, TRAFFIC_DENSITY, SPAWN_DZ, DIST_DIV, CREDIT_RATE, QUALITY_DPR,
+  BRAKE_BASE, UPG_MAX, TRAFFIC_DENSITY, VIEW_DISTANCE, SPAWN_DZ, DIST_DIV, CREDIT_RATE, QUALITY_DPR,
   CHAL_VERSION, HEAT_KM, START_LANE, clamp, fmt, ico, CRED_ICO, getPaint,
 } from "./config.js";
 import { audioUnlock, audioHeat } from "./audio.js";
@@ -22,6 +22,7 @@ export let selectedEnv = "plains";  // the environment the next run takes place 
 export let challengesDone = [];     // ids of completed progression challenges
 export let trafficMode = "twoway";  // "oneway" | "twoway"
 export let trafficDensity = "medium"; // "low" | "medium" | "high"
+export let viewDist = "far";        // "near" | "normal" | "far" — how far you see + cars spawn
 export let gameMode = "heat";       // run mode: "cruise" (flat) | "heat" (escalates) | "pursuit" (cops)
 export let pursuit = false;         // derived: gameMode === "pursuit" (kept for existing call sites)
 export let speedUnit = "mph";       // "kmh" | "mph" — display only
@@ -109,7 +110,9 @@ export const input = { steer: 0, throttle: 0, brake: 0 };
 
 // ---- Derived helpers that read settings ----
 export const densityCfg = () => TRAFFIC_DENSITY[trafficDensity] || TRAFFIC_DENSITY.medium;
-export const spawnAhead = () => SPAWN_DZ * densityCfg().sight; // live spawn distance / sightline
+export const viewCfg = () => VIEW_DISTANCE[viewDist] || VIEW_DISTANCE.normal;
+export const viewMul = () => viewCfg().mult; // how far you see, scaled by the View distance setting
+export const spawnAhead = () => SPAWN_DZ * densityCfg().sight * viewMul(); // live spawn distance / sightline
 export const spd = (internal) => Math.round(internal * SPEED_UNITS[speedUnit].factor);
 export const spdLabel = () => SPEED_UNITS[speedUnit].label;
 export const heatAt = () => (state.position / DIST_DIV) / HEAT_KM;
@@ -143,6 +146,11 @@ export function setTrafficDensity(d) {
   trafficDensity = d;  // takes effect live (spawn rate + sightline read it each frame)
   saveProgress();
 }
+export function setViewDist(v) {
+  if (v === viewDist || !VIEW_DISTANCE[v]) return;
+  viewDist = v;  // takes effect live (fog far + spawn distance read it each frame)
+  saveProgress();
+}
 export function setQuality(q) {
   if (q === quality || !QUALITY_DPR[q]) return;
   quality = q;
@@ -166,6 +174,7 @@ export function loadProgress() {
     if (gameMode !== "cruise" && gameMode !== "pursuit") gameMode = "heat";
     pursuit = gameMode === "pursuit";
     trafficDensity = TRAFFIC_DENSITY[localStorage.getItem("tr_density")] ? localStorage.getItem("tr_density") : "medium";
+    viewDist = VIEW_DISTANCE[localStorage.getItem("tr_view")] ? localStorage.getItem("tr_view") : "far";
     speedUnit = localStorage.getItem("tr_unit") === "kmh" ? "kmh" : "mph"; // default mph for new players
     quality = localStorage.getItem("tr_quality") === "low" ? "low" : "high";
     muted = localStorage.getItem("tr_muted") === "1";
@@ -208,6 +217,7 @@ export function saveProgress() {
     localStorage.setItem("tr_mode", trafficMode);
     localStorage.setItem("tr_gamemode", gameMode);
     localStorage.setItem("tr_density", trafficDensity);
+    localStorage.setItem("tr_view", viewDist);
     localStorage.setItem("tr_unit", speedUnit);
     localStorage.setItem("tr_quality", quality);
     localStorage.setItem("tr_muted", muted ? "1" : "0");

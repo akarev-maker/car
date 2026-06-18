@@ -10,7 +10,7 @@ import {
   ROAD_LEN, ROAD_REPEAT, SLOWMO_MS, Z_SCALE, clamp, getCar, getEnv, smoothstep, worldX, worldZ
 } from "./config.js";
 import {
-  densityCfg, input, paintSpecOf, pursuit, quality, qualityCap, selectedCar, selectedEnv, spd, state, trafficMode
+  densityCfg, input, paintSpecOf, pursuit, quality, qualityCap, selectedCar, selectedEnv, spd, state, trafficMode, viewMul
 } from "./store.js";
 import {
   popups, rings, scenery, traffic
@@ -659,7 +659,9 @@ export function initThree() {
   scene.background = _biomeSky;
   scene.fog = new THREE.Fog(_biomeSky, 70, 300);
 
-  camera = new THREE.PerspectiveCamera(CAM_FOV, 16 / 9, 0.3, 400);
+  // Far plane sits well beyond the deepest fog far (max biome fogFar * density sight
+  // * view-distance mult) so distant scenery fades into fog instead of clipping at the plane.
+  camera = new THREE.PerspectiveCamera(CAM_FOV, 16 / 9, 0.3, 1000);
   camera.position.set(0, 4.3, 9.5);
   camera.lookAt(0, 1.2, -26);
 
@@ -851,7 +853,7 @@ function applyBiome(km) {
   scene.fog.near = mix(a.fogNear, b.fogNear);
   // Quieter road sees further; high heat pulls the horizon in (less reaction time).
   const heatSight = state.running ? Math.max(0.5, 1 - HEAT_FOG * state.heat) : 1;
-  scene.fog.far  = mix(a.fogFar,  b.fogFar) * densityCfg().sight * heatSight;
+  scene.fog.far  = mix(a.fogFar,  b.fogFar) * densityCfg().sight * heatSight * viewMul();
 
   hemiLight.color.set(a.hemiSky).lerp(_biomeTmp.set(b.hemiSky), t);
   hemiLight.groundColor.set(a.hemiGround).lerp(_biomeTmp.set(b.hemiGround), t);
